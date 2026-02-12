@@ -16,6 +16,7 @@ let lastDataId = null;
 let lastChartId = null;
 let lastCommitToken = -1;
 let lastClearToken = -1;
+let lastResetToken = null;
 let selectedCases = new Set();
 let bindLoopId = 0;
 
@@ -95,15 +96,33 @@ function caseNameFromCustomData(cd) {
   return String(cd);
 }
 
+function caseNameFromPoint(point) {
+  try {
+    if (point && point.id != null && String(point.id) !== "") return String(point.id);
+  } catch (e) {}
+  try {
+    const cd = point ? point.customdata : null;
+    if (Array.isArray(cd) && cd.length > 0) return String(cd[0] || "");
+    if (cd && typeof cd === "object") {
+      if (cd.case != null && String(cd.case) !== "") return String(cd.case);
+      if (cd.id != null && String(cd.id) !== "") return String(cd.id);
+    }
+    if (cd != null) return String(cd);
+  } catch (e) {}
+  return "";
+}
+
 function rebuildIndexMap(gd) {
   const byTrace = new Map();
   if (!gd || !Array.isArray(gd.data)) return byTrace;
   for (let ti = 0; ti < gd.data.length; ti++) {
     const map = new Map();
     const tr = gd.data[ti];
+    const ids = Array.isArray(tr.ids) ? tr.ids : [];
     const cds = Array.isArray(tr.customdata) ? tr.customdata : [];
-    for (let i = 0; i < cds.length; i++) {
-      const c = caseNameFromCustomData(cds[i]);
+    const n = Math.max(ids.length, cds.length);
+    for (let i = 0; i < n; i++) {
+      const c = ids[i] != null && String(ids[i]) !== "" ? String(ids[i]) : caseNameFromCustomData(cds[i]);
       if (!c) continue;
       if (!map.has(c)) map.set(c, []);
       map.get(c).push(i);
@@ -113,26 +132,20 @@ function rebuildIndexMap(gd) {
   return byTrace;
 }
 
-function ensureIndexMap(gd) {
-  if (!gd) return new Map();
-  if (!gd.__selBridgeIndexMap) {
-    gd.__selBridgeIndexMap = rebuildIndexMap(gd);
-  }
-  return gd.__selBridgeIndexMap || new Map();
-}
-
 function applyVisual(gd) {
   if (!gd || !latestArgs || !Array.isArray(gd.data)) return;
   const win = gd.ownerDocument && gd.ownerDocument.defaultView ? gd.ownerDocument.defaultView : null;
   const Plotly = win && win.Plotly ? win.Plotly : null;
   if (!Plotly || !Plotly.restyle) return;
-  const indexByTrace = ensureIndexMap(gd);
+  const indexByTrace = rebuildIndexMap(gd);
   const traceIndices = [];
   const selectedpoints = [];
   const unselectedOpacity = [];
   const selectedSize = [];
   const selectedOpacity = [];
+
   for (let ti = 0; ti < gd.data.length; ti++) {
+    const tr = gd.data[ti] || {};
     const map = indexByTrace.get(ti);
     if (!map || map.size === 0) continue;
     const idxs = [];
@@ -146,31 +159,49 @@ function applyVisual(gd) {
     selectedSize.push(Number(latestArgs.selected_marker_size || 10));
     selectedOpacity.push(1.0);
   }
-  if (!traceIndices.length) return;
-  try {
-    Plotly.restyle(
-      gd,
-      {
-        selectedpoints,
-        "selected.marker.opacity": selectedOpacity,
-        "selected.marker.size": selectedSize,
-        "unselected.marker.opacity": unselectedOpacity,
-      },
-      traceIndices,
-    );
-  } catch (e) {}
+  if (traceIndices.length) {
+    try {
+      Plotly.restyle(
+        gd,
+        {
+          selectedpoints,
+          "selected.marker.opacity": selectedOpacity,
+          "selected.marker.size": selectedSize,
+          "unselected.marker.opacity": unselectedOpacity,
+        },
+        traceIndices,
+      );
+    } catch (e) {}
+  }
 }
 
 function bindToTarget() {
   if (!latestArgs) return;
   const plots = getPlotDivs();
+  if (!Array.isArray(plots) || plots.length === 0) return false;
+  const desiredPlotId = String(latestArgs.plot_id || "");
   const idx = Number(latestArgs.plot_index || 0);
-  if (!Array.isArray(plots) || idx < 0 || idx >= plots.length) return false;
-  const gd = plots[idx];
+  let gd = null;
+  if (desiredPlotId === "rx") {
+    for (const p of plots) {
+      const ui = p && p.layout ? String(p.layout.uirevision || "") : "";
+      if (ui.startsWith("rx:")) {
+        gd = p;
+        break;
+      }
+    }
+    // RX bridge must bind only to RX plot. If not found yet, retry instead of falling back.
+    if (!gd) return false;
+  }
+  if (!gd) {
+    if (idx < 0 || idx >= plots.length) return false;
+    gd = plots[idx];
+  }
   if (!gd || !gd.on) return false;
-  const bindKey = `${String(latestArgs.data_id || "")}|${String(latestArgs.chart_id || "")}|${idx}`;
+  const bindKey = `${String(latestArgs.data_id || "")}|${String(latestArgs.chart_id || "")}|${String(desiredPlotId || idx)}`;
+  // Fast path: already bound for this render signature.
   try {
-    if (gd.__selBridgeKey === bindKey) {
+    if (gd.__selBridgeKey === bindKey && gd.__selBridgeClick) {
       applyVisual(gd);
       return true;
     }
@@ -181,21 +212,31 @@ function bindToTarget() {
     if (gd.__selBridgeSlider && gd.removeListener) gd.removeListener("plotly_sliderchange", gd.__selBridgeSlider);
   } catch (e) {}
 
-  const clickHandler = (evt) => {
+  const toggleCasesFromPoints = (points) => {
     try {
-      if (!evt || !Array.isArray(evt.points) || evt.points.length === 0) return;
-      const c = caseNameFromCustomData(evt.points[0].customdata);
-      if (!c) return;
-      if (selectedCases.has(c)) selectedCases.delete(c);
-      else selectedCases.add(c);
+      if (!Array.isArray(points) || points.length === 0) return;
+      const seen = new Set();
+      for (const p of points) {
+        const c = caseNameFromPoint(p);
+        if (!c || seen.has(c)) continue;
+        seen.add(c);
+        if (selectedCases.has(c)) selectedCases.delete(c);
+        else selectedCases.add(c);
+      }
+      if (!seen.size) return;
       persistSelection(String(latestArgs.data_id || ""), String(latestArgs.chart_id || ""));
       applyVisual(gd);
     } catch (e) {}
   };
-  const refreshHandler = () => applyVisual(gd);
+  const clickHandler = (evt) => {
+    if (!evt || !Array.isArray(evt.points) || evt.points.length === 0) return;
+    toggleCasesFromPoints([evt.points[0]]);
+  };
+  const refreshHandler = () => {
+    applyVisual(gd);
+  };
   try {
     gd.__selBridgeKey = bindKey;
-    gd.__selBridgeIndexMap = rebuildIndexMap(gd);
     gd.__selBridgeClick = clickHandler;
     gd.__selBridgeAnimated = refreshHandler;
     gd.__selBridgeSlider = refreshHandler;
@@ -205,21 +246,6 @@ function bindToTarget() {
   gd.on("plotly_sliderchange", refreshHandler);
   applyVisual(gd);
   return true;
-}
-
-function pruneSelectionByAllowed() {
-  if (!latestArgs) return;
-  const allowed = Array.isArray(latestArgs.allowed_cases) ? latestArgs.allowed_cases.map((v) => String(v)) : [];
-  if (!allowed.length) return;
-  const allowedSet = new Set(allowed);
-  let changed = false;
-  for (const c of Array.from(selectedCases)) {
-    if (!allowedSet.has(c)) {
-      selectedCases.delete(c);
-      changed = true;
-    }
-  }
-  if (changed) persistSelection(String(latestArgs.data_id || ""), String(latestArgs.chart_id || ""));
 }
 
 function rebindLoop() {
@@ -244,13 +270,15 @@ window.addEventListener("message", (event) => {
   const commitToken = Number(latestArgs.commit_token || 0);
   const commitApplied = Number(latestArgs.commit_applied || 0);
   const clearToken = Number(latestArgs.clear_token || 0);
+  const resetToken = Number(latestArgs.reset_token || 0);
 
   if (dataId !== lastDataId || chartId !== lastChartId) {
     selectedCases = loadSelection(dataId, chartId);
     lastDataId = dataId;
     lastChartId = chartId;
     lastCommitToken = loadLastSentCommit(dataId, chartId);
-    lastClearToken = -1;
+    // On first mount/rebind for a chart, adopt current clear token without clearing selection.
+    lastClearToken = clearToken;
     bindLoopId += 1;
   }
 
@@ -261,7 +289,13 @@ window.addEventListener("message", (event) => {
     bindLoopId += 1;
   }
 
-  pruneSelectionByAllowed();
+  if (resetToken !== lastResetToken) {
+    lastResetToken = resetToken;
+    selectedCases = new Set();
+    persistSelection(dataId, chartId);
+    bindLoopId += 1;
+  }
+
   const bound = bindToTarget();
   if (!bound) rebindLoop();
 
