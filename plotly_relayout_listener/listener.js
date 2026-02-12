@@ -98,11 +98,6 @@ function getPlotDivs() {
 function applyStoredZoomIfAny(gd, plotId, dataId) {
   const key = storageKey(dataId, plotId);
 
-  try {
-    if (gd.__fsZoomAppliedKey === key) return;
-    gd.__fsZoomAppliedKey = key;
-  } catch (e) {}
-
   const raw = safeLocalStorageGet(key);
   if (!raw) return;
 
@@ -161,7 +156,15 @@ function applyStoredZoomIfAny(gd, plotId, dataId) {
 }
 
 function bindOne(gd, idx, plotId, dataId) {
-  if (!gd || !gd.on) return;
+  if (!gd || !gd.on) return false;
+  const bindKey = `${String(dataId)}|${String(plotId)}|${Number(idx)}`;
+  // Fast path: already bound for this chart signature.
+  try {
+    if (gd.__fsBindKey === bindKey && gd.__fsRelayoutHandler) {
+      applyStoredZoomIfAny(gd, plotId, dataId);
+      return true;
+    }
+  } catch (e) {}
   try {
     if (gd.__fsRelayoutHandler && gd.removeListener) {
       gd.removeListener("plotly_relayout", gd.__fsRelayoutHandler);
@@ -240,28 +243,34 @@ function bindOne(gd, idx, plotId, dataId) {
 
   try {
     gd.__fsRelayoutHandler = handler;
+    gd.__fsBindKey = bindKey;
   } catch (e) {}
   gd.on("plotly_relayout", handler);
   applyStoredZoomIfAny(gd, plotId, dataId);
+  return true;
 }
 
 function syncBindings() {
-  if (!latestArgs) return;
+  if (!latestArgs) return false;
   const plotCount = Number(latestArgs.plot_count || 3);
   const plotIds = Array.isArray(latestArgs.plot_ids) ? latestArgs.plot_ids.map((v) => String(v)) : [];
   const dataId = String(latestArgs.data_id || "");
   const plots = getPlotDivs();
   const n = Math.min(plotCount, plots.length);
+  if (n <= 0) return false;
+  let okCount = 0;
   for (let i = 0; i < n; i++) {
     const plotId = plotIds[i] || String(i);
-    bindOne(plots[i], i, plotId, dataId);
+    if (bindOne(plots[i], i, plotId, dataId)) okCount += 1;
   }
+  return okCount === n;
 }
 
 function kickRebindLoop() {
   let tries = 0;
   (function tick() {
-    syncBindings();
+    const allBound = syncBindings();
+    if (allBound) return;
     tries += 1;
     if (tries < Number(bindTries || 0)) setTimeout(tick, Number(bindIntervalMs || 0));
   })();
