@@ -4,7 +4,7 @@ import json
 import re
 from typing import Dict, List, Tuple, Optional, Set
 
-# Main app baseline (no zoom persistence).
+# Main app baseline with client-side zoom persistence + staged scatter selection.
 
 import numpy as np
 import pandas as pd
@@ -158,11 +158,12 @@ def plotly_relayout_listener(
 def plotly_selection_bridge(
     data_id: str,
     plot_index: int,
+    plot_id: str,
     chart_id: str,
     commit_token: int,
     commit_applied: int,
     clear_token: int,
-    allowed_cases: Optional[List[str]] = None,
+    reset_token: int = 0,
     selected_marker_size: float = float(STUDY_SELECTED_MARKER_SIZE),
     unselected_marker_opacity: float = 0.30,
 ) -> Optional[Dict[str, object]]:
@@ -172,11 +173,12 @@ def plotly_selection_bridge(
     return _plotly_selection_bridge(  # type: ignore[misc]
         data_id=str(data_id),
         plot_index=int(plot_index),
+        plot_id=str(plot_id),
         chart_id=str(chart_id),
         commit_token=int(commit_token),
         commit_applied=int(commit_applied),
         clear_token=int(clear_token),
-        allowed_cases=list(allowed_cases or []),
+        reset_token=int(reset_token),
         selected_marker_size=float(selected_marker_size),
         unselected_marker_opacity=float(unselected_marker_opacity),
         key=f"plotly_selection_bridge:{data_id}:{chart_id}:{plot_index}",
@@ -1019,6 +1021,7 @@ def build_rx_scatter_animated(
     seq_label: str,
     case_colors: Dict[str, str],
     plot_height: int,
+    axis_cases: Optional[List[str]] = None,
 ) -> Tuple[go.Figure, int, int]:
     fig = go.Figure()
     if df_r is None or df_x is None or not cases:
@@ -1042,6 +1045,7 @@ def build_rx_scatter_animated(
         fig.update_layout(height=500)
         return fig, 0, 0
     init_idx = int(min(len(freq_candidates) - 1, max(0, len(freq_candidates) // 2)))
+    freq_candidates_arr = np.asarray(freq_candidates, dtype=float)
 
     r_global_min: Optional[float] = None
     r_global_max: Optional[float] = None
@@ -1055,6 +1059,13 @@ def build_rx_scatter_animated(
         if r_arr is None or x_arr is None:
             continue
         case_arrays.append((str(case), r_arr, x_arr))
+
+    axis_case_list = list(axis_cases) if axis_cases is not None else list(cases)
+    for case in axis_case_list:
+        r_arr = r_map.get(case)
+        x_arr = x_map.get(case)
+        if r_arr is None or x_arr is None:
+            continue
         r_finite = r_arr[np.isfinite(r_arr)]
         x_finite = x_arr[np.isfinite(x_arr)]
         if r_finite.size > 0:
@@ -1068,9 +1079,13 @@ def build_rx_scatter_animated(
             x_global_min = x_min_i if x_global_min is None else min(x_global_min, x_min_i)
             x_global_max = x_max_i if x_global_max is None else max(x_global_max, x_max_i)
 
-    def frame_data_for_freq(f_sel: float) -> Tuple[dict, int]:
-        idx_r = int(np.argmin(np.abs(fr - float(f_sel))))
-        idx_x = int(np.argmin(np.abs(fx - float(f_sel))))
+    # Precompute nearest R/X row indices for each slider frequency once.
+    idx_r_for_freq = np.array([int(np.argmin(np.abs(fr - float(f_sel)))) for f_sel in freq_candidates_arr], dtype=int)
+    idx_x_for_freq = np.array([int(np.argmin(np.abs(fx - float(f_sel)))) for f_sel in freq_candidates_arr], dtype=int)
+
+    def frame_data_for_freq_idx(fi: int) -> Tuple[dict, int]:
+        idx_r = int(idx_r_for_freq[int(fi)])
+        idx_x = int(idx_x_for_freq[int(fi)])
         f_used_r = float(fr[idx_r])
         f_used_x = float(fx[idx_x])
         f_used = 0.5 * (f_used_r + f_used_x)
@@ -1079,6 +1094,7 @@ def build_rx_scatter_animated(
         ys: List[float] = []
         cds: List[List[object]] = []
         colors: List[str] = []
+        ids: List[str] = []
 
         for case, r_arr, x_arr in case_arrays:
             if idx_r >= int(r_arr.size) or idx_x >= int(x_arr.size):
@@ -1091,6 +1107,7 @@ def build_rx_scatter_animated(
             ys.append(float(x_v))
             cds.append([display_case_name(case), float(f_used)])
             colors.append(str(case_colors.get(case, "#1f77b4")))
+            ids.append(str(display_case_name(case)))
 
         trace = dict(
             type="scatter",
@@ -1099,6 +1116,7 @@ def build_rx_scatter_animated(
             mode="markers",
             name="Cases",
             customdata=cds,
+            ids=ids,
             hovertemplate="Case=%{customdata[0]}<br>f=%{customdata[1]:.1f} Hz<br>R=%{x}<br>X=%{y}<extra></extra>",
             marker=dict(
                 color=colors,
@@ -1107,16 +1125,17 @@ def build_rx_scatter_animated(
                 line=dict(width=0),
             ),
             showlegend=False,
+            meta={"kind": "points"},
         )
         return trace, len(xs)
 
     f0 = float(freq_candidates[init_idx])
-    tr0, n0 = frame_data_for_freq(f0)
+    tr0, n0 = frame_data_for_freq_idx(init_idx)
     fig.add_trace(go.Scatter(**tr0))
 
     frames: List[go.Frame] = []
-    for f_sel in freq_candidates:
-        tr_i, _ = frame_data_for_freq(float(f_sel))
+    for i, f_sel in enumerate(freq_candidates):
+        tr_i, _ = frame_data_for_freq_idx(i)
         frames.append(
             go.Frame(
                 name=f"{float(f_sel):.6g}",
@@ -1448,6 +1467,61 @@ def _render_client_png_download(
     components.html(html, height=70)
 
 
+def _render_rx_client_step_controls(seq_label: str):
+    dom_id = hashlib.sha1(f"rx-step:{seq_label}".encode("utf-8")).hexdigest()[: int(EXPORT_DOM_ID_HASH_LEN)]
+    seq_js = json.dumps(str(seq_label))
+    html = f"""
+    <div id="rx-step-{dom_id}" style="display:flex; gap:8px; align-items:center;">
+      <button id="rx-prev-{dom_id}" style="padding:6px 10px; font-size: 1rem; line-height:1; cursor:pointer;">&#8592;</button>
+      <button id="rx-next-{dom_id}" style="padding:6px 10px; font-size: 1rem; line-height:1; cursor:pointer;">&#8594;</button>
+    </div>
+    <script>
+      const seqLabel = {seq_js};
+      function getRxPlot() {{
+        try {{
+          const plots = window.parent?.document?.querySelectorAll?.("div.js-plotly-plot");
+          if (!plots) return null;
+          for (const p of plots) {{
+            const ui = p?.layout?.uirevision ? String(p.layout.uirevision) : "";
+            if (ui === "rx:" + seqLabel || ui.startsWith("rx:")) return p;
+          }}
+        }} catch (e) {{}}
+        return null;
+      }}
+
+      async function stepBy(delta) {{
+        try {{
+          const gd = getRxPlot();
+          if (!gd) return;
+          const Plotly = window.parent?.Plotly || gd?.ownerDocument?.defaultView?.Plotly;
+          if (!Plotly || !Plotly.animate) return;
+          const sliders = Array.isArray(gd?.layout?.sliders) ? gd.layout.sliders : [];
+          if (!sliders.length) return;
+          const active = Number(sliders[0].active || 0);
+          const frames =
+            (gd?._transitionData && Array.isArray(gd._transitionData._frames) && gd._transitionData._frames) ||
+            (Array.isArray(gd?.frames) ? gd.frames : []);
+          const n = frames.length;
+          if (!Number.isFinite(active) || n <= 0) return;
+          const next = Math.max(0, Math.min(n - 1, active + (delta > 0 ? 1 : -1)));
+          if (next === active) return;
+          const frameObj = frames[next];
+          const frameName = frameObj && frameObj.name != null ? String(frameObj.name) : String(next);
+          await Plotly.animate(gd, [frameName], {{
+            mode: "immediate",
+            frame: {{ duration: 0, redraw: false }},
+            transition: {{ duration: 0 }}
+          }});
+        }} catch (e) {{}}
+      }}
+
+      document.getElementById("rx-prev-{dom_id}")?.addEventListener("click", () => stepBy(-1));
+      document.getElementById("rx-next-{dom_id}")?.addEventListener("click", () => stepBy(1));
+    </script>
+    """
+    components.html(html, height=46)
+
+
 def main():
     st.title("FS Sweep Visualizer (Spline)")
 
@@ -1682,14 +1756,18 @@ def main():
         plot_order.append("rx")
 
     bind_nonce_key = f"zoom_bind_nonce:{data_id}"
-    st.session_state[bind_nonce_key] = int(st.session_state.get(bind_nonce_key, 0)) + 1
+    bind_sig_key = f"zoom_bind_sig:{data_id}"
+    bind_sig = f"{data_id}|{','.join(plot_order)}|{int(upload_nonce)}"
+    if str(st.session_state.get(bind_sig_key, "")) != bind_sig:
+        st.session_state[bind_sig_key] = bind_sig
+        st.session_state[bind_nonce_key] = int(st.session_state.get(bind_nonce_key, 0)) + 1
 
     plotly_relayout_listener(
         data_id=data_id,
         plot_count=len(plot_order),
         plot_ids=plot_order,
         debounce_ms=150,
-        nonce=int(st.session_state[bind_nonce_key]),
+        nonce=int(st.session_state.get(bind_nonce_key, 0)),
         reset_token=int(upload_nonce),
     )
 
@@ -1701,61 +1779,141 @@ def main():
     xr_total = 0
 
     if show_plot_x:
-        fig_x, f_x = build_plot_spline(
-            df_x,
-            cases_for_line,
-            f_base,
-            plot_height,
-            x_title,
-            smooth,
-            enable_spline,
-            legend_entrywidth,
-            strip_location_suffix,
-            use_auto_width,
-            figure_width_px,
-            case_colors_line,
-            selected_cases=selected_line_set,
-            show_all_background=bool(line_study_mode and show_all_background),
-        )
+        x_cache_sig_key = f"line_fig_sig:{data_id}:{seq_label}:x"
+        x_cache_fig_key = f"line_fig_cache:{data_id}:{seq_label}:x"
+        x_sig_payload = {
+            "kind": "x",
+            "cases": list(cases_for_line),
+            "sel": sorted(list(selected_line_set)) if selected_line_set is not None else None,
+            "show_bg": bool(line_study_mode and show_all_background),
+            "f_base": float(f_base),
+            "plot_h": int(plot_height),
+            "smooth": float(smooth),
+            "spline": bool(enable_spline),
+            "legend_w": int(legend_entrywidth),
+            "strip_loc": bool(strip_location_suffix),
+            "auto_w": bool(use_auto_width),
+            "fig_w": int(figure_width_px),
+            "colors": [[str(c), str(case_colors_line.get(c, "#1f77b4"))] for c in cases_for_line],
+            "title": str(x_title),
+        }
+        x_sig = hashlib.sha1(json.dumps(x_sig_payload, ensure_ascii=True, separators=(",", ":")).encode("utf-8")).hexdigest()[:16]
+        if st.session_state.get(x_cache_sig_key) != x_sig or (x_cache_fig_key not in st.session_state):
+            fig_x_built, _ = build_plot_spline(
+                df_x,
+                cases_for_line,
+                f_base,
+                plot_height,
+                x_title,
+                smooth,
+                enable_spline,
+                legend_entrywidth,
+                strip_location_suffix,
+                use_auto_width,
+                figure_width_px,
+                case_colors_line,
+                selected_cases=selected_line_set,
+                show_all_background=bool(line_study_mode and show_all_background),
+            )
+            st.session_state[x_cache_sig_key] = x_sig
+            st.session_state[x_cache_fig_key] = fig_x_built.to_dict()
+        fig_x = go.Figure(st.session_state.get(x_cache_fig_key, {}))
+        f_x = df_x["Frequency (Hz)"] if df_x is not None else None
         plot_items.append(_make_plot_item("x", fig_x, f_x, "X_full_legend.png", "X\nPNG", "plot_x"))
 
     if show_plot_r:
-        fig_r, f_r = build_plot_spline(
-            df_r,
-            cases_for_line,
-            f_base,
-            plot_height,
-            r_title,
-            smooth,
-            enable_spline,
-            legend_entrywidth,
-            strip_location_suffix,
-            use_auto_width,
-            figure_width_px,
-            case_colors_line,
-            selected_cases=selected_line_set,
-            show_all_background=bool(line_study_mode and show_all_background),
-        )
+        r_cache_sig_key = f"line_fig_sig:{data_id}:{seq_label}:r"
+        r_cache_fig_key = f"line_fig_cache:{data_id}:{seq_label}:r"
+        r_sig_payload = {
+            "kind": "r",
+            "cases": list(cases_for_line),
+            "sel": sorted(list(selected_line_set)) if selected_line_set is not None else None,
+            "show_bg": bool(line_study_mode and show_all_background),
+            "f_base": float(f_base),
+            "plot_h": int(plot_height),
+            "smooth": float(smooth),
+            "spline": bool(enable_spline),
+            "legend_w": int(legend_entrywidth),
+            "strip_loc": bool(strip_location_suffix),
+            "auto_w": bool(use_auto_width),
+            "fig_w": int(figure_width_px),
+            "colors": [[str(c), str(case_colors_line.get(c, "#1f77b4"))] for c in cases_for_line],
+            "title": str(r_title),
+        }
+        r_sig = hashlib.sha1(json.dumps(r_sig_payload, ensure_ascii=True, separators=(",", ":")).encode("utf-8")).hexdigest()[:16]
+        if st.session_state.get(r_cache_sig_key) != r_sig or (r_cache_fig_key not in st.session_state):
+            fig_r_built, _ = build_plot_spline(
+                df_r,
+                cases_for_line,
+                f_base,
+                plot_height,
+                r_title,
+                smooth,
+                enable_spline,
+                legend_entrywidth,
+                strip_location_suffix,
+                use_auto_width,
+                figure_width_px,
+                case_colors_line,
+                selected_cases=selected_line_set,
+                show_all_background=bool(line_study_mode and show_all_background),
+            )
+            st.session_state[r_cache_sig_key] = r_sig
+            st.session_state[r_cache_fig_key] = fig_r_built.to_dict()
+        fig_r = go.Figure(st.session_state.get(r_cache_fig_key, {}))
+        f_r = df_r["Frequency (Hz)"] if df_r is not None else None
         plot_items.append(_make_plot_item("r", fig_r, f_r, "R_full_legend.png", "R\nPNG", "plot_r"))
 
     if show_plot_xr:
-        fig_xr, f_xr, xr_dropped, xr_total = build_x_over_r_spline(
-            df_r,
-            df_x,
-            cases_for_line,
-            f_base,
-            plot_height,
-            seq_label,
-            smooth,
-            legend_entrywidth,
-            enable_spline,
-            strip_location_suffix,
-            use_auto_width,
-            figure_width_px,
-            case_colors_line,
-            selected_cases=selected_line_set,
-            show_all_background=bool(line_study_mode and show_all_background),
-        )
+        xr_cache_sig_key = f"line_fig_sig:{data_id}:{seq_label}:xr"
+        xr_cache_fig_key = f"line_fig_cache:{data_id}:{seq_label}:xr"
+        xr_cache_meta_key = f"line_fig_meta:{data_id}:{seq_label}:xr"
+        xr_sig_payload = {
+            "kind": "xr",
+            "cases": list(cases_for_line),
+            "sel": sorted(list(selected_line_set)) if selected_line_set is not None else None,
+            "show_bg": bool(line_study_mode and show_all_background),
+            "f_base": float(f_base),
+            "plot_h": int(plot_height),
+            "smooth": float(smooth),
+            "spline": bool(enable_spline),
+            "legend_w": int(legend_entrywidth),
+            "strip_loc": bool(strip_location_suffix),
+            "auto_w": bool(use_auto_width),
+            "fig_w": int(figure_width_px),
+            "colors": [[str(c), str(case_colors_line.get(c, "#1f77b4"))] for c in cases_for_line],
+            "title": str(seq_label),
+        }
+        xr_sig = hashlib.sha1(json.dumps(xr_sig_payload, ensure_ascii=True, separators=(",", ":")).encode("utf-8")).hexdigest()[:16]
+        if st.session_state.get(xr_cache_sig_key) != xr_sig or (xr_cache_fig_key not in st.session_state):
+            fig_xr_built, _, xr_dropped_built, xr_total_built = build_x_over_r_spline(
+                df_r,
+                df_x,
+                cases_for_line,
+                f_base,
+                plot_height,
+                seq_label,
+                smooth,
+                legend_entrywidth,
+                enable_spline,
+                strip_location_suffix,
+                use_auto_width,
+                figure_width_px,
+                case_colors_line,
+                selected_cases=selected_line_set,
+                show_all_background=bool(line_study_mode and show_all_background),
+            )
+            st.session_state[xr_cache_sig_key] = xr_sig
+            st.session_state[xr_cache_fig_key] = fig_xr_built.to_dict()
+            st.session_state[xr_cache_meta_key] = {
+                "xr_dropped": int(xr_dropped_built),
+                "xr_total": int(xr_total_built),
+            }
+        fig_xr = go.Figure(st.session_state.get(xr_cache_fig_key, {}))
+        xr_meta = st.session_state.get(xr_cache_meta_key, {}) if isinstance(st.session_state.get(xr_cache_meta_key, {}), dict) else {}
+        xr_dropped = int(xr_meta.get("xr_dropped", 0))
+        xr_total = int(xr_meta.get("xr_total", 0))
+        f_xr = df_r["Frequency (Hz)"] if df_r is not None else None
         plot_items.append(_make_plot_item("xr", fig_xr, f_xr, "X_over_R_full_legend.png", "X/R\nPNG", "plot_xr"))
 
     f_refs = [it["f_ref"] for it in plot_items if it.get("f_ref") is not None]
@@ -1818,6 +1976,8 @@ def main():
         rx_clear_token_key = f"rx_clear_token:{data_id}:{seq_label}"
         rx_commit_token_key = f"rx_commit_token:{data_id}:{seq_label}"
         rx_commit_applied_key = f"rx_commit_applied:{data_id}:{seq_label}"
+        rx_commit_pending_key = f"rx_commit_pending:{data_id}:{seq_label}"
+        rx_commit_retry_left_key = f"rx_commit_retry_left:{data_id}:{seq_label}"
         rx_filter_sig_key = f"rx_filter_sig:{data_id}:{seq_label}"
         rx_fig_sig_key = f"rx_fig_sig:{data_id}:{seq_label}"
         rx_fig_cache_key = f"rx_fig_cache:{data_id}:{seq_label}"
@@ -1827,15 +1987,13 @@ def main():
         rx_commit_token = int(st.session_state.get(rx_commit_token_key, 0))
         rx_commit_applied = int(st.session_state.get(rx_commit_applied_key, 0))
 
-        # Keep scatter selection stable across case-filter changes:
-        # - preserve selected cases that still exist
-        # - drop selected cases that are no longer in the filtered set
         filter_sig = hashlib.sha1("|".join(sorted(filtered_cases)).encode("utf-8")).hexdigest()[:12]
         prev_filter_sig = str(st.session_state.get(rx_filter_sig_key, ""))
+        all_base_set = {display_case_name(c) for c in all_cases}
         filtered_base_set = {display_case_name(c) for c in filtered_cases}
         prev_committed = [display_case_name(str(v)) for v in st.session_state.get(rx_state_key, [])]
-        pruned_committed = sorted({c for c in prev_committed if c in filtered_base_set})
-        st.session_state[rx_state_key] = pruned_committed
+        committed_clean = sorted({c for c in prev_committed if c in all_base_set})
+        st.session_state[rx_state_key] = committed_clean
         if prev_filter_sig != filter_sig:
             st.session_state[rx_filter_sig_key] = filter_sig
             st.session_state.pop(rx_fig_sig_key, None)
@@ -1843,12 +2001,28 @@ def main():
             st.session_state.pop(rx_fig_points_key, None)
             st.session_state.pop(rx_fig_steps_key, None)
 
-        committed_before = sorted({display_case_name(str(v)) for v in st.session_state.get(rx_state_key, [])})
+        committed_before = sorted({display_case_name(str(v)) for v in st.session_state.get(rx_state_key, []) if display_case_name(str(v)) in all_base_set})
         st.session_state[rx_state_key] = committed_before
+
+        # Location-based baseline for scatter axis limits:
+        # keep axes stable when case-part filters change within the selected location.
+        location_cases_for_axes = list(filtered_cases)
+        if part_labels and part_labels[-1] == "Location":
+            loc_key = f"case_part_{len(part_labels)}_ms"
+            loc_selected_disp = st.session_state.get(loc_key, [])
+            loc_selected_raw = ["" if s == "<empty>" else str(s) for s in loc_selected_disp]
+            if loc_selected_raw:
+                selected_loc = str(loc_selected_raw[0])
+                location_cases_for_axes = [
+                    c for c in all_cases
+                    if str((split_case_location(c)[1] or "")) == selected_loc
+                ]
+
         rx_sig_payload = {
             "seq": str(seq_label),
             "plot_h": int(plot_height),
             "cases": list(filtered_cases),
+            "axis_cases": list(location_cases_for_axes),
             "colors": [[str(c), str(case_colors_scatter.get(c, "#1f77b4"))] for c in filtered_cases],
         }
         rx_sig = hashlib.sha1(json.dumps(rx_sig_payload, ensure_ascii=True, separators=(",", ":")).encode("utf-8")).hexdigest()[:16]
@@ -1861,6 +2035,7 @@ def main():
                 seq_label=seq_label,
                 case_colors=case_colors_scatter,
                 plot_height=int(plot_height),
+                axis_cases=list(location_cases_for_axes),
             )
             st.session_state[rx_fig_sig_key] = rx_sig
             st.session_state[rx_fig_cache_key] = rx_fig_built.to_dict()
@@ -1874,7 +2049,9 @@ def main():
 
         st.plotly_chart(rx_fig, use_container_width=bool(use_auto_width), config=download_config, key="plot_rx")
 
-        left_pad, c1, c2, c3, right_pad = st.columns([1.1, 1.5, 2.1, 2.4, 1.1])
+        left_pad, cnav, c1, c2, c3, right_pad = st.columns([0.8, 1.6, 1.5, 2.1, 2.4, 0.8])
+        with cnav:
+            _render_rx_client_step_controls(seq_label)
         with c1:
             rx_clear_selection = st.button("Clear list", key="rx_clear_selection_btn", use_container_width=True)
         with c2:
@@ -1893,6 +2070,9 @@ def main():
         if rx_show_selection:
             rx_commit_token += 1
             st.session_state[rx_commit_token_key] = int(rx_commit_token)
+            st.session_state[rx_commit_pending_key] = int(rx_commit_token)
+            # One automatic retry rerun is enough in practice to absorb initial bind latency.
+            st.session_state[rx_commit_retry_left_key] = 1
         if rx_copy_to_study:
             to_copy = sorted({display_case_name(str(v)) for v in st.session_state.get(rx_state_key, [])})
             if to_copy:
@@ -1904,11 +2084,12 @@ def main():
         bridge_payload = plotly_selection_bridge(
             data_id=data_id,
             plot_index=int(len(plot_items)),
+            plot_id="rx",
             chart_id=f"rx:{seq_label}",
             commit_token=int(rx_commit_token),
             commit_applied=int(rx_commit_applied),
             clear_token=int(rx_clear_token),
-            allowed_cases=sorted(filtered_base_set),
+            reset_token=int(upload_nonce),
             selected_marker_size=float(STUDY_SELECTED_MARKER_SIZE),
             unselected_marker_opacity=0.30,
         )
@@ -1930,15 +2111,36 @@ def main():
                     {
                         display_case_name(str(v))
                         for v in payload_cases_raw
-                        if str(v).strip() != "" and display_case_name(str(v)) in filtered_base_set
+                        if str(v).strip() != "" and display_case_name(str(v)) in all_base_set
                     }
                 )
                 st.session_state[rx_state_key] = committed_new
+                if int(st.session_state.get(rx_commit_pending_key, 0)) == int(payload_commit_tok):
+                    st.session_state[rx_commit_pending_key] = 0
+                    st.session_state[rx_commit_retry_left_key] = 0
+
+        # First-click reliability: if commit is pending and not yet applied, auto-rerun once.
+        pending_tok = int(st.session_state.get(rx_commit_pending_key, 0))
+        retry_left = int(st.session_state.get(rx_commit_retry_left_key, 0))
+        applied_tok = int(st.session_state.get(rx_commit_applied_key, 0))
+        if pending_tok > 0 and applied_tok < pending_tok and retry_left > 0:
+            st.session_state[rx_commit_retry_left_key] = int(retry_left - 1)
+            st.rerun()
         st.caption(f"R vs X points shown (initial frame): {rx_points_count} | Frequency steps: {rx_freq_steps}")
         st.caption("Point clicks toggle selection. Use Show list selection to commit.")
-        selected_display = sorted({display_case_name(str(v)) for v in st.session_state.get(rx_state_key, [])})
-        st.session_state[rx_state_key] = list(selected_display)
-        _render_rx_selected_cases_table(selected_display, list(filtered_cases), case_colors_scatter)
+        selected_display_all = sorted(
+            {
+                display_case_name(str(v))
+                for v in st.session_state.get(rx_state_key, [])
+                if display_case_name(str(v)) in all_base_set
+            }
+        )
+        st.session_state[rx_state_key] = list(selected_display_all)
+        selected_display_visible = [v for v in selected_display_all if v in filtered_base_set]
+        hidden_selected_count = max(0, len(selected_display_all) - len(selected_display_visible))
+        if hidden_selected_count > 0:
+            st.caption(f"Selected but hidden by filters: {hidden_selected_count}")
+        _render_rx_selected_cases_table(selected_display_visible, list(filtered_cases), case_colors_scatter)
 
 
 if __name__ == "__main__":
