@@ -29,8 +29,8 @@ function nowMs() {
   return Date.now ? Date.now() : new Date().getTime();
 }
 
-function storageKey(dataId, plotId) {
-  return `fsSweepZoom:${String(dataId)}:${String(plotId)}`;
+function storageKey(dataId, plotIndex) {
+  return `fsSweepZoom:${String(dataId)}:${String(plotIndex)}`;
 }
 
 function safeLocalStorageGet(key) {
@@ -95,8 +95,13 @@ function getPlotDivs() {
   return getStreamlitPlotDivsFromDoc(parentDoc);
 }
 
-function applyStoredZoomIfAny(gd, plotId, dataId) {
-  const key = storageKey(dataId, plotId);
+function applyStoredZoomIfAny(gd, idx, dataId) {
+  const key = storageKey(dataId, idx);
+
+  try {
+    if (gd.__fsZoomAppliedKey === key) return;
+    gd.__fsZoomAppliedKey = key;
+  } catch (e) {}
 
   const raw = safeLocalStorageGet(key);
   if (!raw) return;
@@ -155,16 +160,8 @@ function applyStoredZoomIfAny(gd, plotId, dataId) {
   }
 }
 
-function bindOne(gd, idx, plotId, dataId) {
-  if (!gd || !gd.on) return false;
-  const bindKey = `${String(dataId)}|${String(plotId)}|${Number(idx)}`;
-  // Fast path: already bound for this chart signature.
-  try {
-    if (gd.__fsBindKey === bindKey && gd.__fsRelayoutHandler) {
-      applyStoredZoomIfAny(gd, plotId, dataId);
-      return true;
-    }
-  } catch (e) {}
+function bindOne(gd, idx, dataId) {
+  if (!gd || !gd.on) return;
   try {
     if (gd.__fsRelayoutHandler && gd.removeListener) {
       gd.removeListener("plotly_relayout", gd.__fsRelayoutHandler);
@@ -179,7 +176,7 @@ function bindOne(gd, idx, plotId, dataId) {
     try {
       if (gd.__fsApplyingZoom) return;
       if (!evt || typeof evt !== "object") return;
-      const payload = { data_id: String(dataId), plot_index: idx, plot_id: String(plotId) };
+      const payload = { data_id: String(dataId), plot_index: idx };
 
       if (evt["xaxis.autorange"] === true) payload.xautorange = true;
       if (evt["yaxis.autorange"] === true) payload.yautorange = true;
@@ -215,7 +212,7 @@ function bindOne(gd, idx, plotId, dataId) {
         if (autorangeOnly && age >= 0 && age < Number(ignoreAutorangeMs || 0)) return;
       } catch (e) {}
 
-      const key = storageKey(dataId, plotId);
+      const key = storageKey(dataId, idx);
       const existingRaw = safeLocalStorageGet(key);
       let existing = null;
       try {
@@ -243,34 +240,24 @@ function bindOne(gd, idx, plotId, dataId) {
 
   try {
     gd.__fsRelayoutHandler = handler;
-    gd.__fsBindKey = bindKey;
   } catch (e) {}
   gd.on("plotly_relayout", handler);
-  applyStoredZoomIfAny(gd, plotId, dataId);
-  return true;
+  applyStoredZoomIfAny(gd, idx, dataId);
 }
 
 function syncBindings() {
-  if (!latestArgs) return false;
+  if (!latestArgs) return;
   const plotCount = Number(latestArgs.plot_count || 3);
-  const plotIds = Array.isArray(latestArgs.plot_ids) ? latestArgs.plot_ids.map((v) => String(v)) : [];
   const dataId = String(latestArgs.data_id || "");
   const plots = getPlotDivs();
   const n = Math.min(plotCount, plots.length);
-  if (n <= 0) return false;
-  let okCount = 0;
-  for (let i = 0; i < n; i++) {
-    const plotId = plotIds[i] || String(i);
-    if (bindOne(plots[i], i, plotId, dataId)) okCount += 1;
-  }
-  return okCount === n;
+  for (let i = 0; i < n; i++) bindOne(plots[i], i, dataId);
 }
 
 function kickRebindLoop() {
   let tries = 0;
   (function tick() {
-    const allBound = syncBindings();
-    if (allBound) return;
+    syncBindings();
     tries += 1;
     if (tries < Number(bindTries || 0)) setTimeout(tick, Number(bindIntervalMs || 0));
   })();
