@@ -133,6 +133,7 @@ _plotly_selection_bridge = components.declare_component(
 def plotly_relayout_listener(
     data_id: str,
     plot_count: int = 3,
+    plot_ids: Optional[List[str]] = None,
     debounce_ms: int = 120,
     nonce: int = 0,
     reset_token: int = 0,
@@ -142,6 +143,7 @@ def plotly_relayout_listener(
     return _plotly_relayout_listener(  # type: ignore[misc]
         data_id=str(data_id),
         plot_count=int(plot_count),
+        plot_ids=list(plot_ids or []),
         debounce_ms=int(debounce_ms),
         nonce=int(nonce),
         reset_token=int(reset_token),
@@ -162,6 +164,7 @@ def plotly_selection_bridge(
     commit_applied: int,
     clear_token: int,
     reset_token: int = 0,
+    allowed_cases: Optional[List[str]] = None,
     selected_marker_size: float = float(STUDY_SELECTED_MARKER_SIZE),
     unselected_marker_opacity: float = 0.30,
 ) -> Optional[Dict[str, object]]:
@@ -177,6 +180,7 @@ def plotly_selection_bridge(
         commit_applied=int(commit_applied),
         clear_token=int(clear_token),
         reset_token=int(reset_token),
+        allowed_cases=list(allowed_cases or []),
         selected_marker_size=float(selected_marker_size),
         unselected_marker_opacity=float(unselected_marker_opacity),
         key=f"plotly_selection_bridge:{data_id}:{chart_id}:{plot_index}",
@@ -1750,6 +1754,8 @@ def main():
         plot_order.append("r")
     if show_plot_xr:
         plot_order.append("xr")
+    if show_plot_rx:
+        plot_order.append("rx")
 
     bind_nonce_key = f"zoom_bind_nonce:{data_id}"
     # Rebind every rerun so listeners attach to freshly mounted Plotly DOM after Streamlit updates.
@@ -1758,6 +1764,7 @@ def main():
     plotly_relayout_listener(
         data_id=data_id,
         plot_count=len(plot_order),
+        plot_ids=plot_order,
         debounce_ms=150,
         nonce=int(st.session_state.get(bind_nonce_key, 0)),
         reset_token=int(upload_nonce),
@@ -1969,8 +1976,6 @@ def main():
         rx_clear_token_key = f"rx_clear_token:{data_id}:{seq_label}"
         rx_commit_token_key = f"rx_commit_token:{data_id}:{seq_label}"
         rx_commit_applied_key = f"rx_commit_applied:{data_id}:{seq_label}"
-        rx_commit_pending_key = f"rx_commit_pending:{data_id}:{seq_label}"
-        rx_commit_retry_left_key = f"rx_commit_retry_left:{data_id}:{seq_label}"
         rx_filter_sig_key = f"rx_filter_sig:{data_id}:{seq_label}"
         rx_fig_sig_key = f"rx_fig_sig:{data_id}:{seq_label}"
         rx_fig_cache_key = f"rx_fig_cache:{data_id}:{seq_label}"
@@ -1982,10 +1987,9 @@ def main():
 
         filter_sig = hashlib.sha1("|".join(sorted(filtered_cases)).encode("utf-8")).hexdigest()[:12]
         prev_filter_sig = str(st.session_state.get(rx_filter_sig_key, ""))
-        all_base_set = {display_case_name(c) for c in all_cases}
         filtered_base_set = {display_case_name(c) for c in filtered_cases}
         prev_committed = [display_case_name(str(v)) for v in st.session_state.get(rx_state_key, [])]
-        committed_clean = sorted({c for c in prev_committed if c in all_base_set})
+        committed_clean = sorted({c for c in prev_committed if c in filtered_base_set})
         st.session_state[rx_state_key] = committed_clean
         if prev_filter_sig != filter_sig:
             st.session_state[rx_filter_sig_key] = filter_sig
@@ -1994,7 +1998,13 @@ def main():
             st.session_state.pop(rx_fig_points_key, None)
             st.session_state.pop(rx_fig_steps_key, None)
 
-        committed_before = sorted({display_case_name(str(v)) for v in st.session_state.get(rx_state_key, []) if display_case_name(str(v)) in all_base_set})
+        committed_before = sorted(
+            {
+                display_case_name(str(v))
+                for v in st.session_state.get(rx_state_key, [])
+                if display_case_name(str(v)) in filtered_base_set
+            }
+        )
         st.session_state[rx_state_key] = committed_before
 
         # Location-based baseline for scatter axis limits:
@@ -2063,9 +2073,6 @@ def main():
         if rx_show_selection:
             rx_commit_token += 1
             st.session_state[rx_commit_token_key] = int(rx_commit_token)
-            st.session_state[rx_commit_pending_key] = int(rx_commit_token)
-            # One automatic retry rerun is enough in practice to absorb initial bind latency.
-            st.session_state[rx_commit_retry_left_key] = 1
         if rx_copy_to_study:
             to_copy = sorted({display_case_name(str(v)) for v in st.session_state.get(rx_state_key, [])})
             if to_copy:
@@ -2083,6 +2090,7 @@ def main():
             commit_applied=int(rx_commit_applied),
             clear_token=int(rx_clear_token),
             reset_token=int(upload_nonce),
+            allowed_cases=sorted(filtered_base_set),
             selected_marker_size=float(STUDY_SELECTED_MARKER_SIZE),
             unselected_marker_opacity=0.30,
         )
@@ -2104,36 +2112,21 @@ def main():
                     {
                         display_case_name(str(v))
                         for v in payload_cases_raw
-                        if str(v).strip() != "" and display_case_name(str(v)) in all_base_set
+                        if str(v).strip() != "" and display_case_name(str(v)) in filtered_base_set
                     }
                 )
                 st.session_state[rx_state_key] = committed_new
-                if int(st.session_state.get(rx_commit_pending_key, 0)) == int(payload_commit_tok):
-                    st.session_state[rx_commit_pending_key] = 0
-                    st.session_state[rx_commit_retry_left_key] = 0
-
-        # First-click reliability: if commit is pending and not yet applied, auto-rerun once.
-        pending_tok = int(st.session_state.get(rx_commit_pending_key, 0))
-        retry_left = int(st.session_state.get(rx_commit_retry_left_key, 0))
-        applied_tok = int(st.session_state.get(rx_commit_applied_key, 0))
-        if pending_tok > 0 and applied_tok < pending_tok and retry_left > 0:
-            st.session_state[rx_commit_retry_left_key] = int(retry_left - 1)
-            st.rerun()
         st.caption(f"R vs X points shown (initial frame): {rx_points_count} | Frequency steps: {rx_freq_steps}")
         st.caption("Point clicks toggle selection. Use Show list selection to commit.")
-        selected_display_all = sorted(
+        selected_display = sorted(
             {
                 display_case_name(str(v))
                 for v in st.session_state.get(rx_state_key, [])
-                if display_case_name(str(v)) in all_base_set
+                if display_case_name(str(v)) in filtered_base_set
             }
         )
-        st.session_state[rx_state_key] = list(selected_display_all)
-        selected_display_visible = [v for v in selected_display_all if v in filtered_base_set]
-        hidden_selected_count = max(0, len(selected_display_all) - len(selected_display_visible))
-        if hidden_selected_count > 0:
-            st.caption(f"Selected but hidden by filters: {hidden_selected_count}")
-        _render_rx_selected_cases_table(selected_display_visible, list(filtered_cases), case_colors_scatter)
+        st.session_state[rx_state_key] = list(selected_display)
+        _render_rx_selected_cases_table(selected_display, list(filtered_cases), case_colors_scatter)
 
 
 if __name__ == "__main__":

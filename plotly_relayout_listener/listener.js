@@ -29,8 +29,8 @@ function nowMs() {
   return Date.now ? Date.now() : new Date().getTime();
 }
 
-function storageKey(dataId, plotIndex) {
-  return `fsSweepZoom:${String(dataId)}:${String(plotIndex)}`;
+function storageKey(dataId, plotId) {
+  return `fsSweepZoom:${String(dataId)}:${String(plotId)}`;
 }
 
 function safeLocalStorageGet(key) {
@@ -95,8 +95,8 @@ function getPlotDivs() {
   return getStreamlitPlotDivsFromDoc(parentDoc);
 }
 
-function applyStoredZoomIfAny(gd, idx, dataId) {
-  const key = storageKey(dataId, idx);
+function applyStoredZoomIfAny(gd, plotId, dataId) {
+  const key = storageKey(dataId, plotId);
 
   try {
     if (gd.__fsZoomAppliedKey === key) return;
@@ -160,7 +160,7 @@ function applyStoredZoomIfAny(gd, idx, dataId) {
   }
 }
 
-function bindOne(gd, idx, dataId) {
+function bindOne(gd, idx, plotId, dataId) {
   if (!gd || !gd.on) return;
   try {
     if (gd.__fsRelayoutHandler && gd.removeListener) {
@@ -176,7 +176,7 @@ function bindOne(gd, idx, dataId) {
     try {
       if (gd.__fsApplyingZoom) return;
       if (!evt || typeof evt !== "object") return;
-      const payload = { data_id: String(dataId), plot_index: idx };
+      const payload = { data_id: String(dataId), plot_index: idx, plot_id: String(plotId) };
 
       if (evt["xaxis.autorange"] === true) payload.xautorange = true;
       if (evt["yaxis.autorange"] === true) payload.yautorange = true;
@@ -212,7 +212,7 @@ function bindOne(gd, idx, dataId) {
         if (autorangeOnly && age >= 0 && age < Number(ignoreAutorangeMs || 0)) return;
       } catch (e) {}
 
-      const key = storageKey(dataId, idx);
+      const key = storageKey(dataId, plotId);
       const existingRaw = safeLocalStorageGet(key);
       let existing = null;
       try {
@@ -242,16 +242,20 @@ function bindOne(gd, idx, dataId) {
     gd.__fsRelayoutHandler = handler;
   } catch (e) {}
   gd.on("plotly_relayout", handler);
-  applyStoredZoomIfAny(gd, idx, dataId);
+  applyStoredZoomIfAny(gd, plotId, dataId);
 }
 
 function syncBindings() {
   if (!latestArgs) return;
   const plotCount = Number(latestArgs.plot_count || 3);
+  const plotIds = Array.isArray(latestArgs.plot_ids) ? latestArgs.plot_ids.map((v) => String(v)) : [];
   const dataId = String(latestArgs.data_id || "");
   const plots = getPlotDivs();
   const n = Math.min(plotCount, plots.length);
-  for (let i = 0; i < n; i++) bindOne(plots[i], i, dataId);
+  for (let i = 0; i < n; i++) {
+    const plotId = plotIds[i] || String(i);
+    bindOne(plots[i], i, plotId, dataId);
+  }
 }
 
 function kickRebindLoop() {
