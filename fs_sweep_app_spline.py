@@ -133,7 +133,6 @@ _plotly_selection_bridge = components.declare_component(
 def plotly_relayout_listener(
     data_id: str,
     plot_count: int = 3,
-    plot_ids: Optional[List[str]] = None,
     debounce_ms: int = 120,
     nonce: int = 0,
     reset_token: int = 0,
@@ -143,7 +142,6 @@ def plotly_relayout_listener(
     return _plotly_relayout_listener(  # type: ignore[misc]
         data_id=str(data_id),
         plot_count=int(plot_count),
-        plot_ids=list(plot_ids or []),
         debounce_ms=int(debounce_ms),
         nonce=int(nonce),
         reset_token=int(reset_token),
@@ -1752,20 +1750,14 @@ def main():
         plot_order.append("r")
     if show_plot_xr:
         plot_order.append("xr")
-    if show_plot_rx:
-        plot_order.append("rx")
 
     bind_nonce_key = f"zoom_bind_nonce:{data_id}"
-    bind_sig_key = f"zoom_bind_sig:{data_id}"
-    bind_sig = f"{data_id}|{','.join(plot_order)}|{int(upload_nonce)}"
-    if str(st.session_state.get(bind_sig_key, "")) != bind_sig:
-        st.session_state[bind_sig_key] = bind_sig
-        st.session_state[bind_nonce_key] = int(st.session_state.get(bind_nonce_key, 0)) + 1
+    # Rebind every rerun so listeners attach to freshly mounted Plotly DOM after Streamlit updates.
+    st.session_state[bind_nonce_key] = int(st.session_state.get(bind_nonce_key, 0)) + 1
 
     plotly_relayout_listener(
         data_id=data_id,
         plot_count=len(plot_order),
-        plot_ids=plot_order,
         debounce_ms=150,
         nonce=int(st.session_state.get(bind_nonce_key, 0)),
         reset_token=int(upload_nonce),
@@ -1961,6 +1953,7 @@ def main():
 
     for idx, it in enumerate(plot_items):
         fig = it["fig"]
+        kind = str(it.get("kind", ""))
         chart_key = str(it["chart_key"])
         if isinstance(fig, go.Figure):
             st.plotly_chart(fig, use_container_width=bool(use_auto_width), config=download_config, key=chart_key)
