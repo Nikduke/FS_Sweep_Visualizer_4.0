@@ -66,6 +66,14 @@ function scheduleSave(key, jsonValue) {
   saveTimersByKey.set(key, timer);
 }
 
+function saveNow(key, jsonValue) {
+  const t = saveTimersByKey.get(key);
+  if (t) clearTimeout(t);
+  saveTimersByKey.delete(key);
+  if (jsonValue === null) safeLocalStorageRemove(key);
+  else safeLocalStorageSet(key, jsonValue);
+}
+
 function getStreamlitPlotDivsFromDoc(doc) {
   const out = [];
   try {
@@ -176,6 +184,7 @@ function bindOne(gd, idx, plotId, dataId) {
     try {
       if (gd.__fsApplyingZoom) return;
       if (!evt || typeof evt !== "object") return;
+      const isRxPlot = String(plotId) === "rx";
       const payload = { data_id: String(dataId), plot_index: idx, plot_id: String(plotId) };
 
       if (evt["xaxis.autorange"] === true) payload.xautorange = true;
@@ -209,7 +218,9 @@ function bindOne(gd, idx, plotId, dataId) {
           (payload.xautorange === true || payload.yautorange === true) &&
           payload.x0 === undefined &&
           payload.y0 === undefined;
-        if (autorangeOnly && age >= 0 && age < Number(ignoreAutorangeMs || 0)) return;
+        // Keep mount-time autorange suppression for line plots.
+        // For RX scatter, do not suppress: modebar "Reset axes" must clear/refresh persisted zoom immediately.
+        if (!isRxPlot && autorangeOnly && age >= 0 && age < Number(ignoreAutorangeMs || 0)) return;
       } catch (e) {}
 
       const key = storageKey(dataId, plotId);
@@ -234,7 +245,12 @@ function bindOne(gd, idx, plotId, dataId) {
       const nextRaw = hasAny ? JSON.stringify(next) : null;
       if (existingRaw === nextRaw) return;
 
-      scheduleSave(key, nextRaw);
+      const hasAutorange = payload.xautorange === true || payload.yautorange === true;
+      if (isRxPlot && hasAutorange) {
+        saveNow(key, nextRaw);
+      } else {
+        scheduleSave(key, nextRaw);
+      }
     } catch (e) {}
   };
 
