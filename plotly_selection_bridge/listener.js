@@ -740,6 +740,34 @@ function knownCaseId(ctx, rawValue) {
   return known.has(cid) ? cid : "";
 }
 
+function knownCaseIdByTraceName(ctx, rawName) {
+  const traceName = String(rawName || "");
+  if (!traceName) return "";
+  const exactNameId = knownCaseId(ctx, traceName);
+  if (exactNameId) return exactNameId;
+  const dispMap = ctx && ctx.displayLookup instanceof Map ? ctx.displayLookup : null;
+  const matches = dispMap ? dispMap.get(traceName.toLowerCase()) : null;
+  if (Array.isArray(matches) && matches.length === 1) {
+    const only = knownCaseId(ctx, matches[0]);
+    if (only) return only;
+  }
+  return "";
+}
+
+function resolveCaseIdFromTrace(ctx, tr) {
+  if (!tr || typeof tr !== "object") return "";
+  try {
+    const meta = tr.meta && typeof tr.meta === "object" ? tr.meta : null;
+    const fromMeta = knownCaseId(ctx, meta && meta.case_id != null ? meta.case_id : "");
+    if (fromMeta) return fromMeta;
+  } catch (e) {}
+  try {
+    const fromName = knownCaseIdByTraceName(ctx, tr.name);
+    if (fromName) return fromName;
+  } catch (e) {}
+  return "";
+}
+
 function caseIdFromEventPoint(ctx, pt, gd) {
   if (!pt || typeof pt !== "object") return "";
   const fromCustom = knownCaseId(ctx, caseIdFromCustomData(pt.customdata));
@@ -773,15 +801,8 @@ function caseIdFromEventPoint(ctx, pt, gd) {
   } catch (e) {}
   try {
     const traceNameRaw = pt.data && pt.data.name != null ? pt.data.name : "";
-    const traceName = String(traceNameRaw || "");
-    const exactNameId = knownCaseId(ctx, traceName);
-    if (exactNameId) return exactNameId;
-    const dispMap = ctx && ctx.displayLookup instanceof Map ? ctx.displayLookup : null;
-    const matches = dispMap ? dispMap.get(traceName.toLowerCase()) : null;
-    if (Array.isArray(matches) && matches.length === 1) {
-      const only = knownCaseId(ctx, matches[0]);
-      if (only) return only;
-    }
+    const byName = knownCaseIdByTraceName(ctx, traceNameRaw);
+    if (byName) return byName;
   } catch (e) {}
   return "";
 }
@@ -860,26 +881,36 @@ function isVisibleForCase(caseId, allowedSet, selectedSet, showOnlySelected) {
 
 function getLineTraceEntries(ctx, gd) {
   if (!gd || !Array.isArray(gd.data) || !ctx || !ctx.caseById) return [];
+  const ctxKey = `${String(ctx.dataId || "")}|${String(ctx.chartId || "")}|${Number(ctx.casesMeta ? ctx.casesMeta.length : 0)}`;
   try {
     const sameRef = gd.__fsLineEntriesDataRef === gd.data;
     const sameCount = Number(gd.__fsLineEntriesCount || 0) === gd.data.length;
-    if (sameRef && sameCount && Array.isArray(gd.__fsLineEntries)) {
-      return gd.__fsLineEntries;
+    const sameCtx = String(gd.__fsLineEntriesCtxKey || "") === ctxKey;
+    if (sameRef && sameCount && sameCtx && Array.isArray(gd.__fsLineEntries)) {
+      let allKnown = true;
+      for (const row of gd.__fsLineEntries) {
+        const cid = String(row && row.caseId != null ? row.caseId : "");
+        if (!cid || !ctx.caseById.has(cid)) {
+          allKnown = false;
+          break;
+        }
+      }
+      if (allKnown) return gd.__fsLineEntries;
     }
   } catch (e) {}
 
   const entries = [];
   for (let ti = 0; ti < gd.data.length; ti++) {
     const tr = gd.data[ti];
-    const meta = tr && typeof tr.meta === "object" ? tr.meta : null;
-    const caseId = meta && meta.case_id != null ? String(meta.case_id) : "";
-    if (!caseId || !ctx.caseById.has(caseId)) continue;
+    const caseId = resolveCaseIdFromTrace(ctx, tr);
+    if (!caseId) continue;
     entries.push({ traceIndex: ti, caseId });
   }
   try {
     gd.__fsLineEntries = entries;
     gd.__fsLineEntriesDataRef = gd.data;
     gd.__fsLineEntriesCount = gd.data.length;
+    gd.__fsLineEntriesCtxKey = ctxKey;
     gd.__fsLineStyleSig = {};
   } catch (e) {}
   return entries;
@@ -891,11 +922,21 @@ function applyLineStyles(ctx, gd, allowedSet) {
   const Plotly = win && win.Plotly ? win.Plotly : null;
   if (!Plotly || !Plotly.restyle) return;
   const applyToken = Number(ctx.state && ctx.state.__applyVersion != null ? ctx.state.__applyVersion : 0);
+  const applyCtxKey = `${String(ctx.dataId || "")}|${String(ctx.chartId || "")}`;
   try {
     const sameToken = Number(gd.__fsLineApplyToken || 0) === applyToken;
     const sameCount = Number(gd.__fsLineTraceCount || 0) === gd.data.length;
     const sameDataRef = gd.__fsLineDataRef === gd.data;
-    if (sameToken && sameCount && sameDataRef) return;
+    const sameCtx = String(gd.__fsLineApplyCtxKey || "") === applyCtxKey;
+    if (sameToken && sameCount && sameDataRef && sameCtx) return;
+  } catch (e) {}
+
+  try {
+    if (String(gd.__fsLineBaseCtxKey || "") !== applyCtxKey) {
+      gd.__fsCaseUiBase = {};
+      gd.__fsLineStyleSig = {};
+      gd.__fsLineBaseCtxKey = applyCtxKey;
+    }
   } catch (e) {}
 
   const hasSelection = ctx.state.selectedCases.size > 0;
@@ -980,6 +1021,7 @@ function applyLineStyles(ctx, gd, allowedSet) {
     gd.__fsLineApplyToken = applyToken;
     gd.__fsLineTraceCount = gd.data.length;
     gd.__fsLineDataRef = gd.data;
+    gd.__fsLineApplyCtxKey = applyCtxKey;
     return;
   }
   try {
@@ -997,6 +1039,7 @@ function applyLineStyles(ctx, gd, allowedSet) {
     gd.__fsLineApplyToken = applyToken;
     gd.__fsLineTraceCount = gd.data.length;
     gd.__fsLineDataRef = gd.data;
+    gd.__fsLineApplyCtxKey = applyCtxKey;
   } catch (e) {}
 }
 
@@ -1389,15 +1432,21 @@ function applyAllPlots() {
     if (!gd || !Array.isArray(gd.data)) return "";
     let hasPoints = false;
     let hasLineCases = false;
+    let hasIds = false;
+    let hasLineByFallback = false;
     for (let i = 0; i < gd.data.length; i++) {
       const tr = gd.data[i];
       const meta = tr && tr.meta && typeof tr.meta === "object" ? tr.meta : null;
       const kind = String(meta && meta.kind != null ? meta.kind : "");
       if (kind === "points") hasPoints = true;
       if (kind === "line" && meta && meta.case_id != null) hasLineCases = true;
+      if (Array.isArray(tr && tr.ids) && tr.ids.length > 0) hasIds = true;
+      if (!hasLineByFallback && resolveCaseIdFromTrace(ctx, tr)) hasLineByFallback = true;
     }
     if (hasPoints) return "rx";
-    if (hasLineCases) return "line";
+    const hasSlider = Boolean(gd && gd.layout && Array.isArray(gd.layout.sliders) && gd.layout.sliders.length > 0);
+    if (hasIds && hasSlider) return "rx";
+    if (hasLineCases || hasLineByFallback) return "line";
     return "";
   };
 
