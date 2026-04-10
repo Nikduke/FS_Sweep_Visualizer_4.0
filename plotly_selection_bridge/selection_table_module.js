@@ -109,6 +109,7 @@ function registerExternalSelectionApi(ctx) {
       const iecBoundaryVisible = countVisible(iecBoundaryRawSet);
       const iecAdditionalVisible = Math.max(0, iecBoundaryVisible - iecVerticesVisible);
       const pre = getPreselectionPayload();
+      const rxInfo = typeof getScatterFrequencyInfo === "function" ? getScatterFrequencyInfo() : null;
       return {
         stateVersion: Number(st.__applyVersion != null ? st.__applyVersion : 0),
         showOnlySelected: st.showOnlySelected === true,
@@ -131,6 +132,10 @@ function registerExternalSelectionApi(ctx) {
         iecVerticesCandidateCount: Number(iecVerticesVisible),
         iecBoundaryCandidateCount: Number(iecBoundaryVisible),
         iecCollinearAdditionalCount: Number(iecAdditionalVisible),
+        rxCurrentFrequencyHz: Number(rxInfo && Number.isFinite(rxInfo.freqHz) ? rxInfo.freqHz : Number.NaN),
+        rxFrequencyMinHz: Number(rxInfo && Number.isFinite(rxInfo.minHz) ? rxInfo.minHz : Number.NaN),
+        rxFrequencyMaxHz: Number(rxInfo && Number.isFinite(rxInfo.maxHz) ? rxInfo.maxHz : Number.NaN),
+        rxFrequencyStepCount: Number(rxInfo && Number.isFinite(rxInfo.stepCount) ? rxInfo.stepCount : 0),
       };
     },
     setShowOnlySelected: (flag) => {
@@ -257,6 +262,15 @@ function registerExternalSelectionApi(ctx) {
       if (typeof stepScatterFrequencyByDelta !== "function") return false;
       try {
         return stepScatterFrequencyByDelta(nextCtx, Number(delta || 0)) === true;
+      } catch (e) {}
+      return false;
+    },
+    setRxFrequencyHz: (rawVal) => {
+      const nextCtx = ensureContext();
+      if (!nextCtx) return false;
+      if (typeof setScatterFrequencyHz !== "function") return false;
+      try {
+        return setScatterFrequencyHz(nextCtx, rawVal) === true;
       } catch (e) {}
       return false;
     },

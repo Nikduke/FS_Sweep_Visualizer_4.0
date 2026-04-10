@@ -58,8 +58,9 @@ Rendered by `plotly_selection_bridge`:
   - works for explicit `Case part N` color mode and for `Auto` (uses auto-selected hue part)
 - color mode (`Auto`/by case part)
 - selection controls:
-  - when scatter is shown: `Show only selected sweeps` / `Clear list` / `Download selected CSV` are in the scatter control row
-  - when scatter is hidden: these controls are shown in the widget panel
+  - `Clear list` / `Download selected CSV` are shown above the selected-cases table in the widget panel
+  - `Show only selected sweeps` stays in the scatter control row when scatter is shown
+  - when scatter is hidden: `Show only selected sweeps` is shown in the widget panel
   - add list (paste/import)
   - remove selected rows (`Del`)
   - selected CSV download
@@ -103,6 +104,9 @@ Line legend appearance:
 - `Prev frequency` / `Next frequency` buttons:
   - call shared selection API (`stepRxFrequency`) for no-rerun stepping.
   - legacy frame animate path remains as fallback for compatibility.
+- direct frequency entry:
+  - scatter toolbar includes `Set f (Hz)` field + `Set` button.
+  - entered value snaps to the nearest available frequency step without rerun.
 - scatter status line:
   - `R vs X points shown: <count> | Frequency steps: <steps>`
   - `<count>` is case-filtered visible point count.

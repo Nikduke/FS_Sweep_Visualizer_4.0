@@ -1219,6 +1219,60 @@ function stepScatterFrequencyByDelta(ctx, delta) {
   return false;
 }
 
+function getScatterFrequencyInfo() {
+  const plots = getPlotDivs();
+  for (let i = 0; i < plots.length; i++) {
+    const gd = plots[i];
+    if (!gd || !Array.isArray(gd.data)) continue;
+    const pointTraceIndex = getScatterPointTraceIndex(gd);
+    if (pointTraceIndex < 0) continue;
+    const payload = getRxSingleTracePayload(gd);
+    if (!payload) continue;
+    const n = payload.freqValues.length;
+    if (n <= 0) continue;
+    const curRaw = Number(gd.__fsRxSingleActiveIndex);
+    const cur = Number.isFinite(curRaw) ? curRaw : Number(readScatterSliderActiveIndex(gd));
+    const idx = Math.max(0, Math.min(n - 1, Math.floor(cur)));
+    return {
+      gd,
+      payload,
+      index: idx,
+      freqHz: Number(payload.freqValues[idx]),
+      minHz: Number(payload.freqValues[0]),
+      maxHz: Number(payload.freqValues[n - 1]),
+      stepCount: n,
+    };
+  }
+  return null;
+}
+
+function nearestScatterFrequencyIndex(freqValues, targetHz) {
+  const target = Number(targetHz);
+  if (!Array.isArray(freqValues) || !freqValues.length || !Number.isFinite(target)) return -1;
+  let bestIdx = -1;
+  let bestDist = Number.POSITIVE_INFINITY;
+  for (let i = 0; i < freqValues.length; i++) {
+    const freq = Number(freqValues[i]);
+    if (!Number.isFinite(freq)) continue;
+    const dist = Math.abs(freq - target);
+    if (dist < bestDist) {
+      bestDist = dist;
+      bestIdx = i;
+    }
+  }
+  return bestIdx;
+}
+
+function setScatterFrequencyHz(ctx, rawHz) {
+  const targetHz = Number(rawHz);
+  if (!Number.isFinite(targetHz)) return false;
+  const info = getScatterFrequencyInfo();
+  if (!info || !info.payload || !Array.isArray(info.payload.freqValues)) return false;
+  const idx = nearestScatterFrequencyIndex(info.payload.freqValues, targetHz);
+  if (idx < 0) return false;
+  return applyScatterFrequencyIndex(ctx, info.gd, idx);
+}
+
 function resolveScatterCaseIds(tr) {
   const out = [];
   const ids = Array.isArray(tr && tr.ids) ? tr.ids : [];
@@ -1607,10 +1661,6 @@ function renderPanel() {
         <input id="fs-show-only" type="checkbox" ${ctx.state.showOnlySelected ? "checked" : ""} />
         <span style="font-size:12px;">Show only selected sweeps</span>
       </label>
-      <div class="fs-actions">
-        <button type="button" id="fs-clear-list" class="fs-btn">Clear list</button>
-        <button type="button" id="fs-download-csv" class="fs-btn fs-btn-primary">Download selected CSV</button>
-      </div>
     `
     : "";
 
@@ -1854,6 +1904,15 @@ function renderPanel() {
         flex-wrap: wrap;
         margin-top: 8px;
       }
+
+      .fs-actions-inline {
+        margin-top: 0;
+        justify-content: flex-end;
+      }
+
+      .fs-subtitle-inline {
+        margin: 0;
+      }
     </style>
 
     <div class="fs-panel">
@@ -1887,7 +1946,13 @@ function renderPanel() {
       </section>
 
       <section class="fs-section">
-        <div class="fs-subtitle">Selected cases table</div>
+        <div class="fs-row fs-row-space">
+          <div class="fs-subtitle fs-subtitle-inline">Selected cases table</div>
+          <div class="fs-actions fs-actions-inline">
+            <button type="button" id="fs-clear-list" class="fs-btn">Clear list</button>
+            <button type="button" id="fs-download-csv" class="fs-btn fs-btn-primary">Download selected CSV</button>
+          </div>
+        </div>
         <div class="fs-table-wrap">
           <table class="fs-table">
             <thead>

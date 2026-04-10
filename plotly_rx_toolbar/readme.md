@@ -6,7 +6,9 @@ Responsibilities:
 - `Prev frequency` / `Next frequency` stepping
   - primary path: shared bridge API `stepRxFrequency(delta)` (single-trace scatter restyle, no rerun)
   - compatibility fallback: Plotly frame animation if legacy frame-based scatter is present
-- `Clear list`, `Download selected CSV`
+- direct frequency jump
+  - `Set f (Hz)` field + `Set` button
+  - uses shared bridge API to snap to the nearest available scatter frequency without rerun
 - `Show only selected sweeps` checkbox synchronized with shared JS selection API
 - method rows under main control row:
   - `Energinet` toggle with editable `T2/T3/T4` thresholds and `Top N`
@@ -14,5 +16,7 @@ Responsibilities:
   - `Include collinear boundary (+N)` (IEC-dependent; disabled/off when IEC is off)
     - `+N` is the current additional visible-case count vs vertices-only mode
   - both operate via selection API and update selection without Streamlit rerun
+
+`Clear list` / `Download selected CSV` now live in the selection panel above the selected-cases table.
 
 The component consumes selection state/actions through `window.parent.__fsCaseUiApi`.
