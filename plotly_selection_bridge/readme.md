@@ -75,6 +75,7 @@ Related sibling components (same repo):
 9. Supports selection-table actions (clear/remove/import/csv).
    - `Clear list` / `Download selected CSV` are rendered above the selected-cases table.
    - when scatter is hidden, `Show only selected sweeps` is also rendered in the panel.
+   - import list tokenization accepts space/comma/tab/newline separation.
 10. Handles scatter frequency changes without rerun:
     - primary path: single-trace restyle from `layout.meta.rx_single_trace` on `plotly_sliderchange`
     - compatibility fallback: handles legacy animated/frame-based traces if present

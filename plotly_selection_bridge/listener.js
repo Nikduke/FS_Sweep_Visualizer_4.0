@@ -1947,7 +1947,7 @@ function renderPanel() {
 
       <section class="fs-section">
         <div class="fs-subtitle">Add cases to selection</div>
-        <textarea id="fs-import-text" class="fs-textarea" placeholder="Paste case IDs or display names (space/comma/newline separated)"></textarea>
+        <textarea id="fs-import-text" class="fs-textarea" placeholder="Paste case IDs or display names (space/comma/tab/newline separated)"></textarea>
         <div class="fs-actions">
           <button type="button" id="fs-import-add" class="fs-btn">Add list</button>
         </div>

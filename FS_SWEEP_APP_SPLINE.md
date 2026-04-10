@@ -61,7 +61,7 @@ Rendered by `plotly_selection_bridge`:
   - `Clear list` / `Download selected CSV` are shown above the selected-cases table in the widget panel
   - `Show only selected sweeps` stays in the scatter control row when scatter is shown
   - when scatter is hidden: `Show only selected sweeps` is shown in the widget panel
-  - add list (paste/import)
+  - add list (paste/import; accepts space/comma/tab/newline separation)
   - remove selected rows (`Del`)
   - selected CSV download
 - harmonics controls:
