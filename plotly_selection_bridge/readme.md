@@ -73,6 +73,8 @@ Related sibling components (same repo):
 8. Handles click selection toggle on scatter and line plots (`X`, `R`, `X/R`) into the same shared selection state.
    - click case-id resolution validates candidates against known case IDs and falls back through trace metadata.
 9. Supports selection-table actions (clear/remove/import/csv).
+   - `Clear list` / `Download selected CSV` are rendered above the selected-cases table.
+   - when scatter is hidden, `Show only selected sweeps` is also rendered in the panel.
 10. Handles scatter frequency changes without rerun:
     - primary path: single-trace restyle from `layout.meta.rx_single_trace` on `plotly_sliderchange`
     - compatibility fallback: handles legacy animated/frame-based traces if present
@@ -81,6 +83,7 @@ Related sibling components (same repo):
 12. Exposes selection control API at `window.parent.__fsCaseUiApi[{data_id}|{chart_id}]` for scatter-row controls.
     - includes state/query methods plus selection/method mutators
     - includes scatter stepping helper `stepRxFrequency(delta)` for toolbar prev/next controls
+    - includes exact frequency setter `setRxFrequencyHz(rawHz)` and current-frequency state fields for toolbar sync
 13. Apply scheduler uses bounded multi-pass probes and stops early once expected plots are bound/stable.
 14. Maintains source-aware selection model:
     - manual selections (scatter clicks/import/remove)

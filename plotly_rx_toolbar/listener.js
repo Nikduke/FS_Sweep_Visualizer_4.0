@@ -108,6 +108,13 @@ function setInputValueSafe(inputEl, value) {
   inputEl.value = String(value);
 }
 
+function clearInputAttrSafe(inputEl, name) {
+  if (!inputEl) return;
+  try {
+    inputEl.removeAttribute(name);
+  } catch (e) {}
+}
+
 function syncSelectionControls(stateKey, force) {
   try {
     const api = getSelectionApi(stateKey);
@@ -146,8 +153,13 @@ function syncSelectionControls(stateKey, force) {
     const t4 = document.getElementById("rx-t4");
     const enTopN = document.getElementById("rx-en-topn");
     const iecTopN = document.getElementById("rx-iec-topn");
+    const freqInput = document.getElementById("rx-freq");
     const note = document.getElementById("rx-method-note");
     const preselectionAvailable = Boolean(st.preselectionAvailable);
+    const rxCurrentFrequencyHz = st.rxCurrentFrequencyHz != null ? Number(st.rxCurrentFrequencyHz) : Number.NaN;
+    const rxFrequencyMinHz = st.rxFrequencyMinHz != null ? Number(st.rxFrequencyMinHz) : Number.NaN;
+    const rxFrequencyMaxHz = st.rxFrequencyMaxHz != null ? Number(st.rxFrequencyMaxHz) : Number.NaN;
+    const rxFrequencyStepCount = Number(st.rxFrequencyStepCount || 0);
 
     if (cbEnerginet) {
       cbEnerginet.disabled = !preselectionAvailable;
@@ -192,6 +204,19 @@ function syncSelectionControls(stateKey, force) {
       iecTopN.disabled = !preselectionAvailable;
       setInputValueSafe(iecTopN, Number(st.iecTopN || 0));
     }
+    if (freqInput) {
+      const hasFreq = Number.isFinite(rxCurrentFrequencyHz);
+      freqInput.disabled = rxFrequencyStepCount <= 0;
+      if (hasFreq) {
+        setInputValueSafe(freqInput, String(rxCurrentFrequencyHz));
+      }
+      if (Number.isFinite(rxFrequencyMinHz)) freqInput.setAttribute("min", String(rxFrequencyMinHz));
+      else clearInputAttrSafe(freqInput, "min");
+      if (Number.isFinite(rxFrequencyMaxHz)) freqInput.setAttribute("max", String(rxFrequencyMaxHz));
+      else clearInputAttrSafe(freqInput, "max");
+      freqInput.setAttribute("step", "any");
+      freqInput.title = rxFrequencyStepCount > 0 ? "Sets the nearest available frequency step." : "Frequency control unavailable.";
+    }
     if (note) {
       if (!preselectionAvailable) {
         const err = String(st.preselectionError || "");
@@ -208,7 +233,10 @@ function stepFrequency(delta, stateKey) {
     const api = getSelectionApi(stateKey);
     if (api && typeof api.stepRxFrequency === "function") {
       const ok = api.stepRxFrequency(Number(delta || 0));
-      if (ok) return;
+      if (ok) {
+        syncSelectionControls(stateKey, true);
+        return;
+      }
     }
   } catch (e) {}
 
@@ -240,6 +268,21 @@ function stepFrequency(delta, stateKey) {
       frame: { duration: 0, redraw: false },
       transition: { duration: 0 },
     });
+  } catch (e) {}
+}
+
+function pushExactFrequency(stateKey) {
+  const inp = document.getElementById("rx-freq");
+  const targetHz = Number(inp ? inp.value : Number.NaN);
+  if (!Number.isFinite(targetHz)) return;
+  try {
+    const api = getSelectionApi(stateKey);
+    if (api && typeof api.setRxFrequencyHz === "function") {
+      const ok = api.setRxFrequencyHz(targetHz);
+      if (ok) {
+        syncSelectionControls(stateKey, true);
+      }
+    }
   } catch (e) {}
 }
 
@@ -338,6 +381,9 @@ function render() {
         font-size: 12px;
         padding: 2px 4px;
       }
+      .rx-freq {
+        width: 92px;
+      }
       #rx-method-note {
         font-size: 11px;
         color: #7a2e2e;
@@ -348,8 +394,8 @@ function render() {
       <div class="rx-row">
         <button id="rx-prev" type="button" class="rx-btn">&#8592; Prev frequency</button>
         <button id="rx-next" type="button" class="rx-btn">Next frequency &#8594;</button>
-        <button id="rx-clear" type="button" class="rx-btn">Clear list</button>
-        <button id="rx-csv" type="button" class="rx-btn">Download selected CSV</button>
+        <label class="rx-th">Set f (Hz) <input id="rx-freq" class="rx-freq" type="number" step="any" /></label>
+        <button id="rx-freq-apply" type="button" class="rx-btn">Set</button>
         <label class="rx-showonly">
           <input id="rx-showonly" type="checkbox" />
           <span>Show only selected sweeps</span>
@@ -382,9 +428,9 @@ function render() {
 
   const prev = document.getElementById("rx-prev");
   const next = document.getElementById("rx-next");
+  const freqInput = document.getElementById("rx-freq");
+  const freqApplyBtn = document.getElementById("rx-freq-apply");
   const showOnly = document.getElementById("rx-showonly");
-  const clearBtn = document.getElementById("rx-clear");
-  const csvBtn = document.getElementById("rx-csv");
   const energinetCb = document.getElementById("rx-method-energinet");
   const iecCb = document.getElementById("rx-method-iec");
   const iecCollinearCb = document.getElementById("rx-iec-collinear");
@@ -396,6 +442,22 @@ function render() {
 
   if (prev) prev.addEventListener("click", (ev) => { ev.preventDefault(); stepFrequency(-1, stateKey); });
   if (next) next.addEventListener("click", (ev) => { ev.preventDefault(); stepFrequency(1, stateKey); });
+  if (freqApplyBtn) {
+    freqApplyBtn.addEventListener("click", (ev) => {
+      ev.preventDefault();
+      pushExactFrequency(stateKey);
+    });
+  }
+  if (freqInput) {
+    freqInput.addEventListener("change", () => {
+      pushExactFrequency(stateKey);
+    });
+    freqInput.addEventListener("keydown", (ev) => {
+      if (ev.key !== "Enter") return;
+      ev.preventDefault();
+      pushExactFrequency(stateKey);
+    });
+  }
 
   if (showOnly) {
     showOnly.addEventListener("change", () => {
@@ -403,29 +465,6 @@ function render() {
         const api = getSelectionApi(stateKey);
         if (api && typeof api.setShowOnlySelected === "function") {
           api.setShowOnlySelected(Boolean(showOnly.checked));
-        }
-      } catch (e) {}
-    });
-  }
-  if (clearBtn) {
-    clearBtn.addEventListener("click", (ev) => {
-      ev.preventDefault();
-      try {
-        const api = getSelectionApi(stateKey);
-        if (api && typeof api.clearSelection === "function") {
-          api.clearSelection();
-          syncSelectionControls(stateKey, true);
-        }
-      } catch (e) {}
-    });
-  }
-  if (csvBtn) {
-    csvBtn.addEventListener("click", (ev) => {
-      ev.preventDefault();
-      try {
-        const api = getSelectionApi(stateKey);
-        if (api && typeof api.downloadSelectedCsv === "function") {
-          api.downloadSelectedCsv();
         }
       } catch (e) {}
     });
@@ -494,7 +533,7 @@ function render() {
 
   installSelectionSync(stateKey);
   syncSelectionControls(stateKey, true);
-  sendToStreamlit("streamlit:setFrameHeight", { height: 190 });
+  sendToStreamlit("streamlit:setFrameHeight", { height: 200 });
 }
 
 window.addEventListener("message", (event) => {
