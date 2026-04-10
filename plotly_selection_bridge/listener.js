@@ -1905,13 +1905,23 @@ function renderPanel() {
         margin-top: 8px;
       }
 
-      .fs-actions-inline {
-        margin-top: 0;
-        justify-content: flex-end;
+      .fs-action-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
+        margin-top: 10px;
       }
 
-      .fs-subtitle-inline {
-        margin: 0;
+      .fs-action-grid .fs-btn {
+        width: 100%;
+        min-height: 38px;
+        justify-content: center;
+        text-align: center;
+      }
+
+      .fs-selected-note {
+        margin-top: 0;
+        margin-bottom: 2px;
       }
     </style>
 
@@ -1933,7 +1943,6 @@ function renderPanel() {
         <div class="fs-subtitle">Selection</div>
         ${selectionDisabledNote}
         ${selectionToolbarHtml}
-        <div class="fs-note">Selected: ${rows.length} case(s)${hiddenSelectedCount > 0 ? ` | Hidden by filters: ${hiddenSelectedCount}` : ""}</div>
       </section>
 
       <section class="fs-section">
@@ -1946,12 +1955,11 @@ function renderPanel() {
       </section>
 
       <section class="fs-section">
-        <div class="fs-row fs-row-space">
-          <div class="fs-subtitle fs-subtitle-inline">Selected cases table</div>
-          <div class="fs-actions fs-actions-inline">
-            <button type="button" id="fs-clear-list" class="fs-btn">Clear list</button>
-            <button type="button" id="fs-download-csv" class="fs-btn fs-btn-primary">Download selected CSV</button>
-          </div>
+        <div class="fs-subtitle">Selected cases</div>
+        <div class="fs-note fs-selected-note">Selected: ${rows.length} case(s)${hiddenSelectedCount > 0 ? ` | Hidden by filters: ${hiddenSelectedCount}` : ""}</div>
+        <div class="fs-action-grid">
+          <button type="button" id="fs-clear-list" class="fs-btn">Clear list</button>
+          <button type="button" id="fs-download-csv" class="fs-btn fs-btn-primary" title="Download selected CSV">Download CSV</button>
         </div>
         <div class="fs-table-wrap">
           <table class="fs-table">
