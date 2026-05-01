@@ -17,6 +17,7 @@ let thresholdDebounceTimer = null;
 let selectionStateListener = null;
 let activeStateKey = "";
 let lastSyncedStateVersion = Number.NaN;
+let lastSentFrameHeight = 0;
 
 function asNumber(name, fallback) {
   const v = Number(latestArgs && latestArgs[name]);
@@ -112,6 +113,19 @@ function clearInputAttrSafe(inputEl, name) {
   if (!inputEl) return;
   try {
     inputEl.removeAttribute(name);
+  } catch (e) {}
+}
+
+function sendFrameHeightIfNeeded() {
+  try {
+    const root = document.getElementById("rx-step-root");
+    if (!root) return;
+    const rectH = root.getBoundingClientRect ? Number(root.getBoundingClientRect().height || 0) : 0;
+    const rawRootH = Math.max(Number(root.scrollHeight || 0), rectH);
+    const nextH = Math.max(72, Math.ceil(rawRootH) + 4);
+    if (Math.abs(nextH - Number(lastSentFrameHeight || 0)) < 2) return;
+    lastSentFrameHeight = nextH;
+    sendToStreamlit("streamlit:setFrameHeight", { height: nextH });
   } catch (e) {}
 }
 
@@ -225,6 +239,7 @@ function syncSelectionControls(stateKey, force) {
         note.textContent = "";
       }
     }
+    sendFrameHeightIfNeeded();
   } catch (e) {}
 }
 
@@ -342,10 +357,16 @@ function render() {
 
   root.innerHTML = `
     <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        overflow: hidden;
+      }
       #rx-step-root {
         display: grid;
-        gap: 6px;
-        margin: 2px 0 6px 0;
+        gap: 4px;
+        margin: 0;
         font-family: "Open Sans", verdana, arial, sans-serif;
       }
       .rx-row {
@@ -533,7 +554,8 @@ function render() {
 
   installSelectionSync(stateKey);
   syncSelectionControls(stateKey, true);
-  sendToStreamlit("streamlit:setFrameHeight", { height: 200 });
+  sendFrameHeightIfNeeded();
+  setTimeout(sendFrameHeightIfNeeded, 80);
 }
 
 window.addEventListener("message", (event) => {
@@ -544,7 +566,7 @@ window.addEventListener("message", (event) => {
 });
 
 sendToStreamlit("streamlit:componentReady", { apiVersion: 1 });
-sendToStreamlit("streamlit:setFrameHeight", { height: 190 });
+sendToStreamlit("streamlit:setFrameHeight", { height: 96 });
 
 window.addEventListener("beforeunload", () => {
   clearSelectionSyncBindings();

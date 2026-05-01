@@ -19,7 +19,8 @@ Core design:
 - JS direct restyling for high-frequency interactions (case filters/selection/color/harmonics/method toggles).
 - JS-heavy UI helpers are externalized into dedicated component assets (no large inline JS blocks in Python).
 - deterministic preselection metrics are computed server-side once per context and consumed client-side without rerun.
-- when enabled, `R vs X` scatter is rendered before line plots in the main area.
+- default layout renders `R vs X` scatter before line plots in the main area.
+- optional `Selection mode` changes layout only: row 1 is `R vs X` + `X`, row 2 is `R` + `X/R` for enabled plots.
 - data-scoped Streamlit cache keys are pruned on file/context changes to avoid stale-session growth.
 - JS widget state/API stores are pruned to the active `{data_id}|{chart_id}` context.
 - selected-location preselection payload is cached in session state by:
@@ -43,6 +44,13 @@ Core design:
 3. `Show plots`
    - checkbox order: `R vs X scatter`, `X`, `R`, `X/R`
    - for enabled line plots (`X`, `R`, `X/R`), an `Export` button appears on the right side of the same row
+   - `Selection mode` checkbox (default off) changes layout only:
+     - `R vs X` and `X` share the first row evenly when both are enabled
+     - `R` and `X/R` share the second row evenly when both are enabled
+     - a single enabled plot in a row uses full width
+     - charts stretch to the available column width while this mode is enabled
+     - line-plot legends are hidden in this compact selection layout so the plot heights stay visually aligned
+     - line-plot axis titles use the softer default-like style used by the scatter
    - no sidebar legend-width controls (width is internal)
 4. `Case Filters & Selection`
    - `Sequence` (`Positive`/`Zero`)

@@ -129,6 +129,12 @@ DIM_MARKER_OPACITY = 0.28
 
 # ---- R vs X scatter ----
 RX_SCATTER_HEIGHT_FACTOR = 1.5
+RX_TOOLBAR_INITIAL_HEIGHT_PX = 96
+SCATTER_TO_LINE_GAP_PX = 8
+SELECTION_MODE_AXIS_FONT_COLOR = "#6B7280"
+SELECTION_MODE_AXIS_TITLE_FONT_SIZE_PX = 14
+SELECTION_MODE_TICK_FONT_SIZE_PX = 12
+SELECTION_MODE_LINE_MARGIN_BOTTOM_PX = 72
 
 _plotly_selection_bridge = components.declare_component(
     "plotly_selection_bridge_v15",
@@ -1104,6 +1110,48 @@ def apply_common_layout(
     )
 
 
+def apply_selection_mode_line_layout(fig: go.Figure, y_title: str, target_height: int) -> None:
+    """
+    Compact side-by-side selection view: no legend reserve and softer default-like axes.
+    Normal stacked layout keeps `apply_common_layout` untouched.
+    """
+    current_margin = fig.layout.margin
+    left_margin = int(current_margin.l) if current_margin and current_margin.l is not None else int(LEFT_MARGIN_PX)
+    right_margin = int(current_margin.r) if current_margin and current_margin.r is not None else int(RIGHT_MARGIN_PX)
+    top_margin = int(current_margin.t) if current_margin and current_margin.t is not None else int(TOP_MARGIN_PX)
+    axis_title_font = dict(
+        family=STYLE["font_family"],
+        color=str(SELECTION_MODE_AXIS_FONT_COLOR),
+        size=int(SELECTION_MODE_AXIS_TITLE_FONT_SIZE_PX),
+    )
+    tick_font = dict(
+        family=STYLE["font_family"],
+        color=str(SELECTION_MODE_AXIS_FONT_COLOR),
+        size=int(SELECTION_MODE_TICK_FONT_SIZE_PX),
+    )
+    fig.update_layout(
+        height=int(target_height),
+        showlegend=False,
+        margin=dict(
+            l=int(left_margin),
+            r=int(right_margin),
+            t=int(top_margin),
+            b=int(SELECTION_MODE_LINE_MARGIN_BOTTOM_PX),
+        ),
+        margin_autoexpand=False,
+    )
+    fig.update_xaxes(
+        title_text="Harmonic number n = f / f_base",
+        title_font=axis_title_font,
+        tickfont=tick_font,
+    )
+    fig.update_yaxes(
+        title_text=str(y_title),
+        title_font=axis_title_font,
+        tickfont=tick_font,
+    )
+
+
 def build_plot_spline(df: Optional[SheetLike], cases: List[str], f_base: float, plot_height: int, y_title: str,
                       smooth: float, enable_spline: bool, legend_entrywidth: int, strip_location_suffix: bool,
                       use_auto_width: bool, figure_width_px: int, case_colors: Dict[str, str],
@@ -1455,7 +1503,7 @@ def _render_rx_client_step_buttons(plot_index: int, data_id: str, chart_id: str)
         data_id=str(data_id),
         chart_id=str(chart_id),
         key=f"plotly_rx_toolbar:{key_hash}",
-        height=150,
+        height=int(RX_TOOLBAR_INITIAL_HEIGHT_PX),
         default=0,
     )
 
@@ -1598,13 +1646,19 @@ def _render_show_plot_row(label: str, key: str, default: bool) -> Tuple[bool, ob
     return bool(enabled), export_slot
 
 
-def _render_show_plots_controls() -> Tuple[bool, bool, bool, bool, Dict[str, object]]:
+def _render_show_plots_controls() -> Tuple[bool, bool, bool, bool, bool, Dict[str, object]]:
     st.sidebar.header("Show plots")
     show_plot_rx = st.sidebar.checkbox("R vs X scatter", value=True, key="show_plot_rx")
     show_plot_x, export_slot_x = _render_show_plot_row("X", "show_plot_x", True)
     show_plot_r, export_slot_r = _render_show_plot_row("R", "show_plot_r", False)
     show_plot_xr, export_slot_xr = _render_show_plot_row("X/R", "show_plot_xr", False)
-    return show_plot_rx, show_plot_x, show_plot_r, show_plot_xr, {
+    selection_mode_layout = st.sidebar.checkbox(
+        "Selection mode",
+        value=False,
+        key="selection_mode_layout",
+        help="Layout only: put R vs X and X side by side, with R and X/R below.",
+    )
+    return show_plot_rx, show_plot_x, show_plot_r, show_plot_xr, selection_mode_layout, {
         "x": export_slot_x,
         "r": export_slot_r,
         "xr": export_slot_xr,
@@ -1727,7 +1781,8 @@ def main():
     if location_key not in st.session_state or st.session_state.get(location_key) not in location_labels:
         st.session_state[location_key] = location_labels[0]
     # Show-plots controls (R vs X default on).
-    show_plot_rx, show_plot_x, show_plot_r, show_plot_xr, export_slots = _render_show_plots_controls()
+    show_plot_rx, show_plot_x, show_plot_r, show_plot_xr, selection_mode_layout, export_slots = _render_show_plots_controls()
+    render_auto_width = bool(use_auto_width or selection_mode_layout)
     if not (show_plot_x or show_plot_r or show_plot_xr or show_plot_rx):
         st.warning("Select at least one plot to display.")
         st.stop()
@@ -1833,6 +1888,7 @@ def main():
     # Build plots
     r_title = "R1 (\u03A9)" if seq_label == "Positive" else "R0 (\u03A9)"
     x_title = "X1 (\u03A9)" if seq_label == "Positive" else "X0 (\u03A9)"
+    xr_title = "X1/R1 (unitless)" if seq_label == "Positive" else "X0/R0 (unitless)"
     plot_items: List[Dict[str, object]] = []
     xr_dropped = 0
     xr_total = 0
@@ -1847,7 +1903,7 @@ def main():
             "spline": bool(enable_spline),
             "legend_w": int(legend_entrywidth),
             "strip_loc": bool(strip_location_suffix),
-            "auto_w": bool(use_auto_width),
+            "auto_w": bool(render_auto_width),
             "fig_w": int(figure_width_px),
             "colors": [[str(c), str(case_colors_line.get(c, "#1f77b4"))] for c in cases_for_line],
             "title": str(x_title),
@@ -1864,7 +1920,7 @@ def main():
                 enable_spline,
                 legend_entrywidth,
                 strip_location_suffix,
-                use_auto_width,
+                render_auto_width,
                 figure_width_px,
                 case_colors_line,
             )
@@ -1890,7 +1946,7 @@ def main():
             "spline": bool(enable_spline),
             "legend_w": int(legend_entrywidth),
             "strip_loc": bool(strip_location_suffix),
-            "auto_w": bool(use_auto_width),
+            "auto_w": bool(render_auto_width),
             "fig_w": int(figure_width_px),
             "colors": [[str(c), str(case_colors_line.get(c, "#1f77b4"))] for c in cases_for_line],
             "title": str(r_title),
@@ -1907,7 +1963,7 @@ def main():
                 enable_spline,
                 legend_entrywidth,
                 strip_location_suffix,
-                use_auto_width,
+                render_auto_width,
                 figure_width_px,
                 case_colors_line,
             )
@@ -1933,7 +1989,7 @@ def main():
             "spline": bool(enable_spline),
             "legend_w": int(legend_entrywidth),
             "strip_loc": bool(strip_location_suffix),
-            "auto_w": bool(use_auto_width),
+            "auto_w": bool(render_auto_width),
             "fig_w": int(figure_width_px),
             "colors": [[str(c), str(case_colors_line.get(c, "#1f77b4"))] for c in cases_for_line],
             "title": str(seq_label),
@@ -1951,7 +2007,7 @@ def main():
                 legend_entrywidth,
                 enable_spline,
                 strip_location_suffix,
-                use_auto_width,
+                render_auto_width,
                 figure_width_px,
                 case_colors_line,
             )
@@ -1974,10 +2030,25 @@ def main():
 
     f_refs = [it["f_ref"] for it in plot_items if it.get("f_ref") is not None]
     n_lo, n_hi = compute_common_n_range(f_refs, f_base)
+    line_y_titles = {
+        "x": str(x_title),
+        "r": str(r_title),
+        "xr": str(xr_title),
+    }
+    selection_mode_chart_height = max(
+        420,
+        int(round(float(plot_height) * float(RX_SCATTER_HEIGHT_FACTOR))),
+    )
     for it in plot_items:
         fig = it["fig"]
         if isinstance(fig, go.Figure):
             fig.update_xaxes(range=[n_lo, n_hi])
+            if selection_mode_layout:
+                apply_selection_mode_line_layout(
+                    fig=fig,
+                    y_title=str(line_y_titles.get(str(it.get("kind", "")), "")),
+                    target_height=int(selection_mode_chart_height),
+                )
 
     # Render
     location_caption = selected_location if selected_location else "<empty>"
@@ -2010,24 +2081,27 @@ def main():
         legend_entrywidth=int(legend_entrywidth),
     )
 
-    scatter_slot = st.container()
-    line_slot = st.container()
-
-    with line_slot:
-        for idx, it in enumerate(plot_items):
-            fig = it["fig"]
-            chart_key = str(it["chart_key"])
-            if isinstance(fig, go.Figure):
-                st.plotly_chart(fig, use_container_width=bool(use_auto_width), config=download_config, key=chart_key)
-            if idx < len(plot_items) - 1:
-                st.markdown("<div style='height:36px'></div>", unsafe_allow_html=True)
-
     rx_status_dom_id = ""
     rx_freq_steps_for_bridge = 0
-    with scatter_slot:
+
+    def render_line_plot_item(it: Dict[str, object]) -> None:
+        fig = it["fig"]
+        chart_key = str(it["chart_key"])
+        if isinstance(fig, go.Figure):
+            st.plotly_chart(fig, use_container_width=bool(render_auto_width), config=download_config, key=chart_key)
+
+    def render_line_plot_sequence(items: List[Dict[str, object]]) -> None:
+        for idx, it in enumerate(items):
+            render_line_plot_item(it)
+            if idx < len(items) - 1:
+                st.markdown("<div style='height:36px'></div>", unsafe_allow_html=True)
+
+    def render_rx_scatter_plot(show_heading: bool = True) -> None:
+        nonlocal rx_status_dom_id, rx_freq_steps_for_bridge
         if show_plot_rx:
-            st.markdown("<div style='height:20px'></div>", unsafe_allow_html=True)
-            st.subheader("R vs X Scatter")
+            if show_heading:
+                st.markdown("<div style='height:20px'></div>", unsafe_allow_html=True)
+                st.subheader("R vs X Scatter")
 
             rx_filter_sig_key = f"rx_filter_sig:{data_id}:{seq_label}"
             rx_fig_sig_key = f"rx_fig_sig:{data_id}:{seq_label}"
@@ -2073,18 +2147,66 @@ def main():
             rx_freq_steps_for_bridge = int(rx_freq_steps)
             rx_status_dom_id = f"rx-status-{hashlib.sha1(f'{data_id}:{chart_id}'.encode('utf-8')).hexdigest()[:10]}"
 
-            st.plotly_chart(rx_fig, use_container_width=bool(use_auto_width), config=download_config, key="plot_rx")
+            st.plotly_chart(rx_fig, use_container_width=bool(render_auto_width), config=download_config, key="plot_rx")
             rx_plot_index = int(plot_order.index("rx")) if "rx" in plot_order else 0
             _render_rx_client_step_buttons(rx_plot_index, data_id=data_id, chart_id=chart_id)
             st.markdown(
                 (
-                    f"<div id=\"{rx_status_dom_id}\" style=\"font-size:0.92rem; color:#666; margin:2px 0 2px 0;\">"
+                    f"<div id=\"{rx_status_dom_id}\" style=\"font-size:0.92rem; color:#666; margin:2px 0 0 0; line-height:1.2;\">"
                     f"R vs X points shown: {len(location_cases)} | Frequency steps: {int(rx_freq_steps)}"
+                    "</div>"
+                    f"<div style=\"font-size:0.82rem; color:#6b7280; margin:0 0 {int(SCATTER_TO_LINE_GAP_PX)}px 0; line-height:1.2;\">"
+                    "Point clicks toggle selection. Case-part/color/selection controls are in the sidebar."
                     "</div>"
                 ),
                 unsafe_allow_html=True,
             )
-            st.caption("Point clicks toggle selection. Case-part/color/selection controls are in the sidebar.")
+
+    def render_selection_mode_row(row_kinds: List[str]) -> None:
+        if not row_kinds:
+            return
+        if len(row_kinds) == 1:
+            kind = str(row_kinds[0])
+            if kind == "rx":
+                render_rx_scatter_plot(show_heading=False)
+            elif kind in plot_items_by_kind:
+                render_line_plot_item(plot_items_by_kind[kind])
+            return
+
+        row_columns = st.columns(len(row_kinds), gap="medium")
+        for column, kind in zip(row_columns, row_kinds):
+            with column:
+                if kind == "rx":
+                    render_rx_scatter_plot(show_heading=False)
+                elif kind in plot_items_by_kind:
+                    render_line_plot_item(plot_items_by_kind[kind])
+
+    if selection_mode_layout:
+        first_row_kinds: List[str] = []
+        if show_plot_rx:
+            first_row_kinds.append("rx")
+        if show_plot_x and "x" in plot_items_by_kind:
+            first_row_kinds.append("x")
+
+        second_row_kinds: List[str] = []
+        if show_plot_r and "r" in plot_items_by_kind:
+            second_row_kinds.append("r")
+        if show_plot_xr and "xr" in plot_items_by_kind:
+            second_row_kinds.append("xr")
+
+        render_selection_mode_row(first_row_kinds)
+        if first_row_kinds and second_row_kinds:
+            st.markdown("<div style='height:36px'></div>", unsafe_allow_html=True)
+        render_selection_mode_row(second_row_kinds)
+    else:
+        scatter_slot = st.container()
+        line_slot = st.container()
+
+        with line_slot:
+            render_line_plot_sequence(plot_items)
+
+        with scatter_slot:
+            render_rx_scatter_plot(show_heading=True)
 
     sel_bind_nonce_key = _selection_bind_nonce_key(str(data_id), str(chart_id))
     st.session_state[sel_bind_nonce_key] = int(st.session_state.get(sel_bind_nonce_key, 0)) + 1
